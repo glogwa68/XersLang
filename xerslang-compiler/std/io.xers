@@ -1,0 +1,50 @@
+// XersLang Standard Library - I/O Module
+// Provides input/output functions wrapping builtins
+
+// Print a string to stdout
+// Uses print_char builtin to output each character
+fn print(s: i64) -> i64 {
+    let len = strlen(s);
+    let i = 0;
+    while i < len {
+        let c = peek(s, i);
+        print_char(c);
+        i = i + 1;
+    }
+    return len;
+}
+
+// Print a string to stdout followed by a newline
+fn println(s: i64) -> i64 {
+    let count = print(s);
+    print_char(10);  // newline character
+    return count + 1;
+}
+
+// Read a line from stdin into a buffer
+// Returns the number of characters read (excluding newline)
+// buf: pointer to allocated buffer
+// max_len: maximum characters to read
+fn read_line(buf: i64, max_len: i64) -> i64 {
+    let i = 0;
+    while i < max_len {
+        // Note: This is a placeholder implementation
+        // In a real implementation, we would need a read_char builtin
+        // For now, we'll return 0 to indicate no input
+        return 0;
+    }
+    return i;
+}
+
+// Print an integer (wrapper around builtin)
+fn print_num(n: i64) -> i64 {
+    print_int(n);
+    return 0;
+}
+
+// Print an integer followed by newline
+fn println_num(n: i64) -> i64 {
+    print_int(n);
+    print_char(10);
+    return 0;
+}

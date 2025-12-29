@@ -1,0 +1,218 @@
+{
+  "Function Definition": {
+    "prefix": "fn",
+    "body": [
+      "fn ${1:name}(${2:params}) -> ${3:i64} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Define a new function with return type"
+  },
+  "Function No Return": {
+    "prefix": "fnv",
+    "body": [
+      "fn ${1:name}(${2:params}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Define a function with no return value"
+  },
+  "Main Function": {
+    "prefix": "main",
+    "body": [
+      "fn main() -> i64 {",
+      "\t$0",
+      "\treturn 0;",
+      "}"
+    ],
+    "description": "Create main entry point function"
+  },
+  "Main Simple": {
+    "prefix": "mains",
+    "body": [
+      "fn main() {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Create simple main function"
+  },
+  "If Statement": {
+    "prefix": "if",
+    "body": [
+      "if ${1:condition} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "If statement"
+  },
+  "If-Else Statement": {
+    "prefix": "ife",
+    "body": [
+      "if ${1:condition} {",
+      "\t$2",
+      "} else {",
+      "\t$0",
+      "}"
+    ],
+    "description": "If-else statement"
+  },
+  "While Loop": {
+    "prefix": "while",
+    "body": [
+      "while ${1:condition} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "While loop"
+  },
+  "Let Binding": {
+    "prefix": "let",
+    "body": [
+      "let ${1:name}: ${2:i64} = ${3:value};"
+    ],
+    "description": "Variable binding with type annotation"
+  },
+  "Let Inferred": {
+    "prefix": "leti",
+    "body": [
+      "let ${1:name} = ${2:value};"
+    ],
+    "description": "Variable binding with type inference"
+  },
+  "Allocate Memory": {
+    "prefix": "alloc",
+    "body": [
+      "let ${1:ptr} = alloc(${2:size});"
+    ],
+    "description": "Allocate memory with alloc builtin"
+  },
+  "Peek Value": {
+    "prefix": "peek",
+    "body": [
+      "let ${1:value} = peek(${2:ptr});"
+    ],
+    "description": "Read value from memory with peek builtin"
+  },
+  "Poke Value": {
+    "prefix": "poke",
+    "body": [
+      "poke(${1:ptr}, ${2:value});"
+    ],
+    "description": "Write value to memory with poke builtin"
+  },
+  "String Length": {
+    "prefix": "strlen",
+    "body": [
+      "let ${1:len} = strlen(${2:str});"
+    ],
+    "description": "Get string length with strlen builtin"
+  },
+  "String Compare": {
+    "prefix": "streq",
+    "body": [
+      "if streq(${1:str1}, ${2:str2}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Compare strings with streq builtin"
+  },
+  "Print Integer": {
+    "prefix": "printi",
+    "body": [
+      "print_int(${1:value});"
+    ],
+    "description": "Print integer with print_int builtin"
+  },
+  "Read File": {
+    "prefix": "readf",
+    "body": [
+      "let ${1:content} = read_file(${2:\"filename\"});"
+    ],
+    "description": "Read file contents with read_file builtin"
+  },
+  "File Length": {
+    "prefix": "flen",
+    "body": [
+      "let ${1:size} = file_len(${2:\"filename\"});"
+    ],
+    "description": "Get file size with file_len builtin"
+  },
+  "Write File": {
+    "prefix": "writef",
+    "body": [
+      "write_file(${1:\"filename\"}, ${2:content}, ${3:size});"
+    ],
+    "description": "Write to file with write_file builtin"
+  },
+  "Return Statement": {
+    "prefix": "ret",
+    "body": [
+      "return ${1:value};"
+    ],
+    "description": "Return statement"
+  },
+  "Return 0": {
+    "prefix": "ret0",
+    "body": [
+      "return 0;"
+    ],
+    "description": "Return 0 (success)"
+  },
+  "Exit Program": {
+    "prefix": "exit",
+    "body": [
+      "exit(${1:0});"
+    ],
+    "description": "Exit program with exit code"
+  },
+  "Comment Block": {
+    "prefix": "/*",
+    "body": [
+      "/*",
+      " * ${1:comment}",
+      " */"
+    ],
+    "description": "Multi-line comment block"
+  },
+  "For-like Loop": {
+    "prefix": "fori",
+    "body": [
+      "let ${1:i} = ${2:0};",
+      "while ${1:i} < ${3:n} {",
+      "\t$0",
+      "\t${1:i} = ${1:i} + 1;",
+      "}"
+    ],
+    "description": "For-like loop using while"
+  },
+  "Buffer Operations": {
+    "prefix": "buffer",
+    "body": [
+      "let ${1:buffer} = alloc(${2:256});",
+      "// Use buffer...",
+      "$0"
+    ],
+    "description": "Allocate and use a buffer"
+  },
+  "Fibonacci Template": {
+    "prefix": "fib",
+    "body": [
+      "fn fibonacci(n: i64) -> i64 {",
+      "\tif n <= 1 {",
+      "\t\treturn n;",
+      "\t}",
+      "\tlet a = 0;",
+      "\tlet b = 1;",
+      "\tlet i = 2;",
+      "\twhile i <= n {",
+      "\t\tlet temp = a + b;",
+      "\t\ta = b;",
+      "\t\tb = temp;",
+      "\t\ti = i + 1;",
+      "\t}",
+      "\treturn b;",
+      "}"
+    ],
+    "description": "Fibonacci function template"
+  }
+}
