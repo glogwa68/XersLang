@@ -1,0 +1,13 @@
+{
+  "iconDefinitions": {
+    "xers": {
+      "iconPath": "./xers-file.svg"
+    }
+  },
+  "fileExtensions": {
+    "xers": "xers"
+  },
+  "languageIds": {
+    "xerslang": "xers"
+  }
+}
