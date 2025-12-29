@@ -1,0 +1,3151 @@
+// ============================================================================
+// XersLang Self-Hosted Compiler
+// ============================================================================
+// A minimal, self-hosted compiler for the XersLang language.
+// Compiles .xers source files to Windows x64 PE executables.
+//
+// Architecture:
+//   1. LEXER: Tokenizes source code (skip_ws, next_tok)
+//   2. PARSER: Builds AST and generates code directly (parse_*)
+//   3. CODEGEN: Emits x64 machine code (emit*, codegen_*)
+//   4. PE WRITER: Writes Windows PE executable format (write_pe)
+//
+// Memory Layout:
+//   - State struct (256 bytes): Compiler state (position, symbols, etc.)
+//   - Source buffer (1MB): Input .xers file contents
+//   - Code buffer (512KB): Generated x64 machine code
+//   - Symbol table (64KB): Function and variable symbols
+//   - PE buffer (512KB): Final PE executable output
+// ============================================================================
+
+// ============================================================================
+// SECTION 1: MEMORY UTILITIES
+// ============================================================================
+// Helper functions for reading/writing multi-byte integers in memory.
+// XersLang only has peek/poke for single bytes, so we manually construct
+// larger integers by reading/writing byte-by-byte.
+fn mem_write_i64(buf, off, val) {
+    poke(buf, off, val);
+    poke(buf, off + 1, val / 256);
+    poke(buf, off + 2, val / 65536);
+    poke(buf, off + 3, val / 16777216);
+    poke(buf, off + 4, val / 4294967296);
+    poke(buf, off + 5, val / 1099511627776);
+    poke(buf, off + 6, val / 281474976710656);
+    poke(buf, off + 7, val / 72057594037927936);
+    return 0;
+}
+
+fn mem_read_i64(buf, off) {
+    let b0 = peek(buf, off);
+    let b1 = peek(buf, off + 1);
+    let b2 = peek(buf, off + 2);
+    let b3 = peek(buf, off + 3);
+    let b4 = peek(buf, off + 4);
+    let b5 = peek(buf, off + 5);
+    let b6 = peek(buf, off + 6);
+    let b7 = peek(buf, off + 7);
+    return b0 + b1*256 + b2*65536 + b3*16777216 + b4*4294967296 + b5*1099511627776 + b6*281474976710656 + b7*72057594037927936;
+}
+
+fn mem_write_i32(buf, off, val) {
+    poke(buf, off, val);
+    poke(buf, off + 1, val / 256);
+    poke(buf, off + 2, val / 65536);
+    poke(buf, off + 3, val / 16777216);
+    return 0;
+}
+
+fn mem_write_i16(buf, off, val) {
+    poke(buf, off, val);
+    poke(buf, off + 1, val / 256);
+    return 0;
+}
+
+// ============================================================================
+// SECTION 2: CHARACTER CLASSIFICATION
+// ============================================================================
+// Character classification functions for lexical analysis.
+// ASCII values: space=32, tab=9, newline=10, CR=13, '0'=48, '9'=57,
+//               'A'=65, 'Z'=90, 'a'=97, 'z'=122, '_'=95
+
+fn is_ws(c) {
+    if c == 32 { return 1; }
+    if c == 9 { return 1; }
+    if c == 10 { return 1; }
+    if c == 13 { return 1; }
+    return 0;
+}
+
+fn is_digit(c) {
+    if c >= 48 {
+        if c <= 57 { return 1; }
+    }
+    return 0;
+}
+
+fn is_alpha(c) {
+    if c >= 65 {
+        if c <= 90 { return 1; }
+    }
+    if c >= 97 {
+        if c <= 122 { return 1; }
+    }
+    if c == 95 { return 1; }
+    return 0;
+}
+
+fn is_alnum(c) {
+    if is_alpha(c) == 1 { return 1; }
+    if is_digit(c) == 1 { return 1; }
+    return 0;
+}
+
+// ============================================================================
+// SECTION 3: TOKEN TYPE DEFINITIONS
+// ============================================================================
+// Token type constants returned by the lexer.
+// Each token type has a unique numeric ID for efficient comparison.
+
+fn T_EOF() { return 0; }
+fn T_NUM() { return 2; }
+fn T_ID() { return 1; }
+fn T_FN() { return 10; }
+fn T_LET() { return 11; }
+fn T_IF() { return 12; }
+fn T_ELSE() { return 13; }
+fn T_WHILE() { return 14; }
+fn T_RET() { return 15; }
+fn T_USE() { return 16; }
+fn T_MOD() { return 17; }
+fn T_PUB() { return 18; }
+fn T_PLUS() { return 20; }
+fn T_MINUS() { return 21; }
+fn T_STAR() { return 22; }
+fn T_SLASH() { return 23; }
+fn T_EQ() { return 24; }
+fn T_NE() { return 25; }
+fn T_LT() { return 26; }
+fn T_GT() { return 27; }
+fn T_LE() { return 28; }
+fn T_GE() { return 29; }
+fn T_ASSIGN() { return 30; }
+fn T_LBRACE() { return 40; }
+fn T_RBRACE() { return 41; }
+fn T_LPAREN() { return 42; }
+fn T_RPAREN() { return 43; }
+fn T_SEMI() { return 44; }
+fn T_COMMA() { return 45; }
+fn T_COLONCOLON() { return 46; }
+
+// ============================================================================
+// SECTION 4: COMPILER STATE STRUCTURE
+// ============================================================================
+// Offsets into the compiler state buffer (256 bytes).
+// This struct holds all global state needed during compilation.
+
+fn S_POS() { return 0; }
+fn S_LEN() { return 8; }
+fn S_SRC() { return 16; }
+fn S_TOK() { return 24; }
+fn S_TPOS() { return 32; }
+fn S_TLEN() { return 40; }
+fn S_CODE() { return 48; }
+fn S_CPOS() { return 56; }
+fn S_SYM() { return 64; }
+fn S_SYMN() { return 72; }
+fn S_LOCN() { return 80; }
+fn S_LINE() { return 88; }   // Current line number
+fn S_COL() { return 96; }    // Current column number
+fn S_TLINE() { return 104; } // Token line number
+fn S_TCOL() { return 112; }  // Token column number
+fn S_MODN() { return 120; }  // Number of modules loaded
+fn S_MODBUF() { return 128; } // Pointer to module tracking buffer
+fn S_RELOC() { return 136; }  // Pointer to relocation table
+fn S_RELOCN() { return 144; } // Number of relocations
+fn S_FILEN() { return 152; }  // Number of files to compile
+
+// ============================================================================
+// SECTION 5: ERROR REPORTING
+// ============================================================================
+// Error reporting with line/column information
+
+// Print a single character to output
+fn print_char(c) {
+    print_int(c);
+    return 0;
+}
+
+// Print a number digit by digit (recursive helper)
+fn print_num_helper(n) {
+    if n > 0 {
+        print_num_helper(n / 10);
+        print_char(48 + (n - (n / 10) * 10));
+    }
+    return 0;
+}
+
+// Print a number
+fn print_num(n) {
+    if n == 0 {
+        print_char(48);
+        return 0;
+    }
+    if n < 0 {
+        print_char(45);
+        n = 0 - n;
+    }
+    print_num_helper(n);
+    return 0;
+}
+
+// Print error message with line and column
+fn error_at(st, msg_ptr) {
+    let line = mem_read_i64(st, S_TLINE());
+    let col = mem_read_i64(st, S_TCOL());
+
+    print_char(69);   // 'E'
+    print_char(114);  // 'r'
+    print_char(114);  // 'r'
+    print_char(111);  // 'o'
+    print_char(114);  // 'r'
+    print_char(32);   // ' '
+    print_char(97);   // 'a'
+    print_char(116);  // 't'
+    print_char(32);   // ' '
+    print_char(108);  // 'l'
+    print_char(105);  // 'i'
+    print_char(110);  // 'n'
+    print_char(101);  // 'e'
+    print_char(32);   // ' '
+    print_num(line);
+    print_char(58);   // ':'
+    print_char(32);   // ' '
+
+    // Print message if provided (for now, just end with newline)
+    print_char(10);   // newline
+    return 1;
+}
+
+// Check if current token matches expected token type
+fn expect_token(st, expected) {
+    let tok = mem_read_i64(st, S_TOK());
+    if tok != expected {
+        error_at(st, 0);
+        return 1;
+    }
+    return 0;
+}
+
+// ============================================================================
+// SECTION 6: LEXER (TOKENIZER)
+// ============================================================================
+// Tokenizes XersLang source code into tokens for the parser.
+// Handles whitespace, comments, keywords, identifiers, numbers, and operators.
+
+// Skip whitespace and comments
+fn skip_ws(st) {
+    let src = mem_read_i64(st, S_SRC());
+    let len = mem_read_i64(st, S_LEN());
+    let pos = mem_read_i64(st, S_POS());
+    let line = mem_read_i64(st, S_LINE());
+    let col = mem_read_i64(st, S_COL());
+    while pos < len {
+        let c = peek(src, pos);
+        if is_ws(c) == 1 {
+            if c == 10 {
+                line = line + 1;
+                col = 1;
+            } else {
+                col = col + 1;
+            }
+            pos = pos + 1;
+        } else {
+            if c == 47 {
+                if pos + 1 < len {
+                    let c2 = peek(src, pos + 1);
+                    if c2 == 47 {
+                        while pos < len {
+                            let cc = peek(src, pos);
+                            if cc == 10 {
+                                line = line + 1;
+                                col = 1;
+                                pos = pos + 1;
+                                let done = 0;
+                            } else {
+                                col = col + 1;
+                                pos = pos + 1;
+                            }
+                        }
+                    } else {
+                        mem_write_i64(st, S_POS(), pos);
+                        mem_write_i64(st, S_LINE(), line);
+                        mem_write_i64(st, S_COL(), col);
+                        return 0;
+                    }
+                } else {
+                    mem_write_i64(st, S_POS(), pos);
+                    mem_write_i64(st, S_LINE(), line);
+                    mem_write_i64(st, S_COL(), col);
+                    return 0;
+                }
+            } else {
+                mem_write_i64(st, S_POS(), pos);
+                mem_write_i64(st, S_LINE(), line);
+                mem_write_i64(st, S_COL(), col);
+                return 0;
+            }
+        }
+    }
+    mem_write_i64(st, S_POS(), pos);
+    mem_write_i64(st, S_LINE(), line);
+    mem_write_i64(st, S_COL(), col);
+    return 0;
+}
+
+// Tokenize next token
+fn next_tok(st) {
+    skip_ws(st);
+
+    // Capture token position (line/col) at start of token
+    let line = mem_read_i64(st, S_LINE());
+    let col = mem_read_i64(st, S_COL());
+    mem_write_i64(st, S_TLINE(), line);
+    mem_write_i64(st, S_TCOL(), col);
+
+    let src = mem_read_i64(st, S_SRC());
+    let len = mem_read_i64(st, S_LEN());
+    let pos = mem_read_i64(st, S_POS());
+
+    if pos >= len {
+        mem_write_i64(st, S_TOK(), T_EOF());
+        mem_write_i64(st, S_TPOS(), pos);
+        mem_write_i64(st, S_TLEN(), 0);
+        return 0;
+    }
+
+    let c = peek(src, pos);
+
+    // Number
+    if is_digit(c) == 1 {
+        let start = pos;
+        while pos < len {
+            let cc = peek(src, pos);
+            if is_digit(cc) == 0 {
+                mem_write_i64(st, S_TOK(), T_NUM());
+                mem_write_i64(st, S_TPOS(), start);
+                mem_write_i64(st, S_TLEN(), pos - start);
+                mem_write_i64(st, S_POS(), pos);
+                return 0;
+            }
+            pos = pos + 1;
+        }
+        mem_write_i64(st, S_TOK(), T_NUM());
+        mem_write_i64(st, S_TPOS(), start);
+        mem_write_i64(st, S_TLEN(), pos - start);
+        mem_write_i64(st, S_POS(), pos);
+        return 0;
+    }
+
+    // Identifier/keyword
+    if is_alpha(c) == 1 {
+        let start = pos;
+        while pos < len {
+            let cc = peek(src, pos);
+            if is_alnum(cc) == 0 {
+                let tlen = pos - start;
+                // Check keywords
+                if tlen == 2 {
+                    let c0 = peek(src, start);
+                    let c1 = peek(src, start + 1);
+                    if c0 == 102 {
+                        if c1 == 110 {
+                            mem_write_i64(st, S_TOK(), T_FN());
+                            mem_write_i64(st, S_TPOS(), start);
+                            mem_write_i64(st, S_TLEN(), tlen);
+                            mem_write_i64(st, S_POS(), pos);
+                            return 0;
+                        }
+                    }
+                    if c0 == 105 {
+                        if c1 == 102 {
+                            mem_write_i64(st, S_TOK(), T_IF());
+                            mem_write_i64(st, S_TPOS(), start);
+                            mem_write_i64(st, S_TLEN(), tlen);
+                            mem_write_i64(st, S_POS(), pos);
+                            return 0;
+                        }
+                    }
+                }
+                if tlen == 3 {
+                    let c0 = peek(src, start);
+                    let c1 = peek(src, start + 1);
+                    let c2 = peek(src, start + 2);
+                    if c0 == 108 {
+                        if c1 == 101 {
+                            if c2 == 116 {
+                                mem_write_i64(st, S_TOK(), T_LET());
+                                mem_write_i64(st, S_TPOS(), start);
+                                mem_write_i64(st, S_TLEN(), tlen);
+                                mem_write_i64(st, S_POS(), pos);
+                                return 0;
+                            }
+                        }
+                    }
+                    if c0 == 117 {
+                        if c1 == 115 {
+                            if c2 == 101 {
+                                mem_write_i64(st, S_TOK(), T_USE());
+                                mem_write_i64(st, S_TPOS(), start);
+                                mem_write_i64(st, S_TLEN(), tlen);
+                                mem_write_i64(st, S_POS(), pos);
+                                return 0;
+                            }
+                        }
+                    }
+                    if c0 == 109 {
+                        if c1 == 111 {
+                            if c2 == 100 {
+                                mem_write_i64(st, S_TOK(), T_MOD());
+                                mem_write_i64(st, S_TPOS(), start);
+                                mem_write_i64(st, S_TLEN(), tlen);
+                                mem_write_i64(st, S_POS(), pos);
+                                return 0;
+                            }
+                        }
+                    }
+                    if c0 == 112 {
+                        if c1 == 117 {
+                            if c2 == 98 {
+                                mem_write_i64(st, S_TOK(), T_PUB());
+                                mem_write_i64(st, S_TPOS(), start);
+                                mem_write_i64(st, S_TLEN(), tlen);
+                                mem_write_i64(st, S_POS(), pos);
+                                return 0;
+                            }
+                        }
+                    }
+                }
+                if tlen == 4 {
+                    let c0 = peek(src, start);
+                    if c0 == 101 {
+                        mem_write_i64(st, S_TOK(), T_ELSE());
+                        mem_write_i64(st, S_TPOS(), start);
+                        mem_write_i64(st, S_TLEN(), tlen);
+                        mem_write_i64(st, S_POS(), pos);
+                        return 0;
+                    }
+                }
+                if tlen == 5 {
+                    let c0 = peek(src, start);
+                    if c0 == 119 {
+                        mem_write_i64(st, S_TOK(), T_WHILE());
+                        mem_write_i64(st, S_TPOS(), start);
+                        mem_write_i64(st, S_TLEN(), tlen);
+                        mem_write_i64(st, S_POS(), pos);
+                        return 0;
+                    }
+                }
+                if tlen == 6 {
+                    let c0 = peek(src, start);
+                    if c0 == 114 {
+                        mem_write_i64(st, S_TOK(), T_RET());
+                        mem_write_i64(st, S_TPOS(), start);
+                        mem_write_i64(st, S_TLEN(), tlen);
+                        mem_write_i64(st, S_POS(), pos);
+                        return 0;
+                    }
+                }
+                mem_write_i64(st, S_TOK(), T_ID());
+                mem_write_i64(st, S_TPOS(), start);
+                mem_write_i64(st, S_TLEN(), tlen);
+                mem_write_i64(st, S_POS(), pos);
+                return 0;
+            }
+            pos = pos + 1;
+        }
+        let tlen = pos - start;
+        mem_write_i64(st, S_TOK(), T_ID());
+        mem_write_i64(st, S_TPOS(), start);
+        mem_write_i64(st, S_TLEN(), tlen);
+        mem_write_i64(st, S_POS(), pos);
+        return 0;
+    }
+
+    // Single char tokens
+    if c == 123 { mem_write_i64(st, S_TOK(), T_LBRACE()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
+    if c == 125 { mem_write_i64(st, S_TOK(), T_RBRACE()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
+    if c == 40 { mem_write_i64(st, S_TOK(), T_LPAREN()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
+    if c == 41 { mem_write_i64(st, S_TOK(), T_RPAREN()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
+    if c == 59 { mem_write_i64(st, S_TOK(), T_SEMI()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
+    if c == 44 { mem_write_i64(st, S_TOK(), T_COMMA()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
+    if c == 43 { mem_write_i64(st, S_TOK(), T_PLUS()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
+    if c == 45 { mem_write_i64(st, S_TOK(), T_MINUS()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
+    if c == 42 { mem_write_i64(st, S_TOK(), T_STAR()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
+    if c == 47 { mem_write_i64(st, S_TOK(), T_SLASH()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
+
+    // Two char operators
+    if c == 61 {
+        if pos + 1 < len {
+            let c2 = peek(src, pos + 1);
+            if c2 == 61 {
+                mem_write_i64(st, S_TOK(), T_EQ());
+                mem_write_i64(st, S_TPOS(), pos);
+                mem_write_i64(st, S_TLEN(), 2);
+                mem_write_i64(st, S_POS(), pos + 2);
+                return 0;
+            }
+        }
+        mem_write_i64(st, S_TOK(), T_ASSIGN());
+        mem_write_i64(st, S_TPOS(), pos);
+        mem_write_i64(st, S_TLEN(), 1);
+        mem_write_i64(st, S_POS(), pos + 1);
+        return 0;
+    }
+
+    if c == 33 {
+        if pos + 1 < len {
+            let c2 = peek(src, pos + 1);
+            if c2 == 61 {
+                mem_write_i64(st, S_TOK(), T_NE());
+                mem_write_i64(st, S_TPOS(), pos);
+                mem_write_i64(st, S_TLEN(), 2);
+                mem_write_i64(st, S_POS(), pos + 2);
+                return 0;
+            }
+        }
+    }
+
+    if c == 60 {
+        if pos + 1 < len {
+            let c2 = peek(src, pos + 1);
+            if c2 == 61 {
+                mem_write_i64(st, S_TOK(), T_LE());
+                mem_write_i64(st, S_TPOS(), pos);
+                mem_write_i64(st, S_TLEN(), 2);
+                mem_write_i64(st, S_POS(), pos + 2);
+                return 0;
+            }
+        }
+        mem_write_i64(st, S_TOK(), T_LT());
+        mem_write_i64(st, S_TPOS(), pos);
+        mem_write_i64(st, S_TLEN(), 1);
+        mem_write_i64(st, S_POS(), pos + 1);
+        return 0;
+    }
+
+    if c == 58 {
+        if pos + 1 < len {
+            let c2 = peek(src, pos + 1);
+            if c2 == 58 {
+                mem_write_i64(st, S_TOK(), T_COLONCOLON());
+                mem_write_i64(st, S_TPOS(), pos);
+                mem_write_i64(st, S_TLEN(), 2);
+                mem_write_i64(st, S_POS(), pos + 2);
+                return 0;
+            }
+        }
+    }
+
+    if c == 62 {
+        if pos + 1 < len {
+            let c2 = peek(src, pos + 1);
+            if c2 == 61 {
+                mem_write_i64(st, S_TOK(), T_GE());
+                mem_write_i64(st, S_TPOS(), pos);
+                mem_write_i64(st, S_TLEN(), 2);
+                mem_write_i64(st, S_POS(), pos + 2);
+                return 0;
+            }
+        }
+        mem_write_i64(st, S_TOK(), T_GT());
+        mem_write_i64(st, S_TPOS(), pos);
+        mem_write_i64(st, S_TLEN(), 1);
+        mem_write_i64(st, S_POS(), pos + 1);
+        return 0;
+    }
+
+    // Unknown - skip
+    mem_write_i64(st, S_POS(), pos + 1);
+    return next_tok(st);
+}
+
+// ============================================================================
+// SECTION 6: CODE GENERATION - EMISSION
+// ============================================================================
+// Functions for emitting x64 machine code bytes into the code buffer.
+// Handles byte-by-byte emission, 32-bit values, and 64-bit values.
+
+fn emit(st, b) {
+    let code = mem_read_i64(st, S_CODE());
+    let pos = mem_read_i64(st, S_CPOS());
+    poke(code, pos, b);
+    mem_write_i64(st, S_CPOS(), pos + 1);
+    return 0;
+}
+
+fn emit32(st, val) {
+    emit(st, val);
+    emit(st, val / 256);
+    emit(st, val / 65536);
+    emit(st, val / 16777216);
+    return 0;
+}
+
+fn emit64(st, val) {
+    emit32(st, val);
+    emit32(st, val / 4294967296);
+    return 0;
+}
+
+fn code_pos(st) {
+    return mem_read_i64(st, S_CPOS());
+}
+
+fn patch32(st, pos, val) {
+    let code = mem_read_i64(st, S_CODE());
+    poke(code, pos, val);
+    poke(code, pos + 1, val / 256);
+    poke(code, pos + 2, val / 65536);
+    poke(code, pos + 3, val / 16777216);
+    return 0;
+}
+
+// Emit prologue
+fn emit_pro(st) {
+    emit(st, 85);           // push rbp
+    emit(st, 72); emit(st, 137); emit(st, 229);  // mov rbp, rsp
+    emit(st, 72); emit(st, 129); emit(st, 236); emit32(st, 2048);  // sub rsp, 128
+    return 0;
+}
+
+// Emit epilogue
+fn emit_epi(st) {
+    emit(st, 72); emit(st, 137); emit(st, 236);  // mov rsp, rbp
+    emit(st, 93);  // pop rbp
+    emit(st, 195); // ret
+    return 0;
+}
+
+// Emit mov rax, imm64
+fn emit_rax_imm(st, val) {
+    emit(st, 72); emit(st, 184); emit64(st, val);
+    return 0;
+}
+
+// Emit CALL [RIP+disp32] for IAT call
+// IAT indices: 0=ExitProcess, 1=GetStdHandle, 2=WriteFile, 3=CreateFileA
+//              4=ReadFile, 5=CloseHandle, 6=GetFileSize, 7=VirtualAlloc
+fn emit_iat_call(st, index) {
+    // CALL [RIP+disp32] = FF 15 <disp32>
+    // IAT is at RVA 0x2070 (0x2000 + 0x70), code at RVA 0x1000
+    // disp32 = (0x2070 + index*8) - (0x1000 + code_pos + 6)
+    let pos = code_pos(st);
+    let iat_addr = 8304 + index * 8;  // 0x2070 = 8304
+    let code_end = 4096 + pos + 6;     // 0x1000 = 4096
+    let disp = iat_addr - code_end;
+
+    emit(st, 255);  // FF
+    emit(st, 21);   // 15
+    emit32(st, disp);
+    return 0;
+}
+
+// ============================================================================
+// SECTION 7: SYMBOL TABLE
+// ============================================================================
+// Symbol table for tracking functions and variables.
+// Each symbol is 32 bytes: (name_pos, name_len, kind, offset)
+// Kind: 0=local var, 1=function, 2=parameter
+
+fn add_sym(st, npos, nlen, kind, off) {
+    let sym = mem_read_i64(st, S_SYM());
+    let n = mem_read_i64(st, S_SYMN());
+    let o = n * 32;
+    mem_write_i64(sym, o, npos);
+    mem_write_i64(sym, o + 8, nlen);
+    mem_write_i64(sym, o + 16, kind);
+    mem_write_i64(sym, o + 24, off);
+    mem_write_i64(st, S_SYMN(), n + 1);
+    return n;
+}
+
+fn find_sym(st, npos, nlen) {
+    let src = mem_read_i64(st, S_SRC());
+    let sym = mem_read_i64(st, S_SYM());
+    let n = mem_read_i64(st, S_SYMN());
+    let i = n - 1;
+    while i >= 0 {
+        let o = i * 32;
+        let spos = mem_read_i64(sym, o);
+        let slen = mem_read_i64(sym, o + 8);
+        if slen == nlen {
+            let matched = 1;
+            let j = 0;
+            while j < nlen {
+                let c1 = peek(src, npos + j);
+                let c2 = peek(src, spos + j);
+                if c1 != c2 { matched = 0; j = nlen; }
+                j = j + 1;
+            }
+            if matched == 1 { return i; }
+        }
+        i = i - 1;
+    }
+    return 0 - 1;
+}
+
+fn sym_kind(st, idx) {
+    let sym = mem_read_i64(st, S_SYM());
+    return mem_read_i64(sym, idx * 32 + 16);
+}
+
+fn sym_off(st, idx) {
+    let sym = mem_read_i64(st, S_SYM());
+    return mem_read_i64(sym, idx * 32 + 24);
+}
+
+// ============================================================================
+// SECTION 7B: RELOCATION TABLE (MULTI-FILE SUPPORT)
+// ============================================================================
+// Relocation table for tracking forward references across files.
+// Each entry is 24 bytes: (code_offset, name_pos, name_len)
+
+fn add_reloc(st, code_off, npos, nlen) {
+    let reloc = mem_read_i64(st, S_RELOC());
+    let n = mem_read_i64(st, S_RELOCN());
+    let off = n * 24;
+    mem_write_i64(reloc, off, code_off);
+    mem_write_i64(reloc, off + 8, npos);
+    mem_write_i64(reloc, off + 16, nlen);
+    mem_write_i64(st, S_RELOCN(), n + 1);
+    return n;
+}
+
+fn resolve_relocs(st) {
+    let reloc = mem_read_i64(st, S_RELOC());
+    let n = mem_read_i64(st, S_RELOCN());
+    let code = mem_read_i64(st, S_CODE());
+    let i = 0;
+
+    while i < n {
+        let off = i * 24;
+        let code_off = mem_read_i64(reloc, off);
+        let npos = mem_read_i64(reloc, off + 8);
+        let nlen = mem_read_i64(reloc, off + 16);
+
+        // Find the function in symbol table
+        let idx = find_sym(st, npos, nlen);
+        if idx >= 0 {
+            let foff = sym_off(st, idx);
+            // Calculate relative offset from end of call instruction
+            let rel = foff - (code_off + 4);
+            // Patch the 32-bit offset in the code buffer
+            mem_write_i32(code, code_off, rel);
+        }
+        // If unresolved, leave as 0 (will crash or be caught later)
+
+        i = i + 1;
+    }
+    return 0;
+}
+
+// ============================================================================
+// SECTION 8: BUILTIN FUNCTIONS
+// ============================================================================
+// Detection and code generation for XersLang builtin functions.
+// Builtins: peek, poke, strlen, streq, alloc, print_int, read_file, file_len
+
+// Forward declarations removed - functions defined later in file
+// (The ASM compiler supports forward references for function calls)
+
+// Builtin detection: returns builtin ID (1-8) or 0 if not a builtin
+fn is_builtin(st, name_pos, name_len) {
+    let src = mem_read_i64(st, S_SRC());
+
+    // peek (4 chars)
+    if name_len == 4 {
+        if peek(src, name_pos) == 112 {
+            if peek(src, name_pos + 1) == 101 {
+                if peek(src, name_pos + 2) == 101 {
+                    if peek(src, name_pos + 3) == 107 {
+                        return 1;
+                    }
+                }
+            }
+        }
+        // poke (4 chars)
+        if peek(src, name_pos) == 112 {
+            if peek(src, name_pos + 1) == 111 {
+                if peek(src, name_pos + 2) == 107 {
+                    if peek(src, name_pos + 3) == 101 {
+                        return 2;
+                    }
+                }
+            }
+        }
+    }
+
+    // alloc (5 chars)
+    if name_len == 5 {
+        if peek(src, name_pos) == 97 {
+            if peek(src, name_pos + 1) == 108 {
+                if peek(src, name_pos + 2) == 108 {
+                    if peek(src, name_pos + 3) == 111 {
+                        if peek(src, name_pos + 4) == 99 {
+                            return 5;
+                        }
+                    }
+                }
+            }
+        }
+        // streq (5 chars)
+        if peek(src, name_pos) == 115 {
+            if peek(src, name_pos + 1) == 116 {
+                if peek(src, name_pos + 2) == 114 {
+                    if peek(src, name_pos + 3) == 101 {
+                        if peek(src, name_pos + 4) == 113 {
+                            return 4;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // strlen (6 chars)
+    if name_len == 6 {
+        if peek(src, name_pos) == 115 {
+            if peek(src, name_pos + 1) == 116 {
+                if peek(src, name_pos + 2) == 114 {
+                    if peek(src, name_pos + 3) == 108 {
+                        if peek(src, name_pos + 4) == 101 {
+                            if peek(src, name_pos + 5) == 110 {
+                                return 3;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // file_len (8 chars)
+    if name_len == 8 {
+        if peek(src, name_pos) == 102 {
+            if peek(src, name_pos + 1) == 105 {
+                if peek(src, name_pos + 2) == 108 {
+                    if peek(src, name_pos + 3) == 101 {
+                        if peek(src, name_pos + 4) == 95 {
+                            if peek(src, name_pos + 5) == 108 {
+                                if peek(src, name_pos + 6) == 101 {
+                                    if peek(src, name_pos + 7) == 110 {
+                                        return 8;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // read_file (9 chars)
+    if name_len == 9 {
+        if peek(src, name_pos) == 114 {
+            if peek(src, name_pos + 1) == 101 {
+                if peek(src, name_pos + 2) == 97 {
+                    if peek(src, name_pos + 3) == 100 {
+                        if peek(src, name_pos + 4) == 95 {
+                            if peek(src, name_pos + 5) == 102 {
+                                if peek(src, name_pos + 6) == 105 {
+                                    if peek(src, name_pos + 7) == 108 {
+                                        if peek(src, name_pos + 8) == 101 {
+                                            return 7;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // print_int (9 chars)
+    if name_len == 9 {
+        if peek(src, name_pos) == 112 {
+            if peek(src, name_pos + 1) == 114 {
+                if peek(src, name_pos + 2) == 105 {
+                    if peek(src, name_pos + 3) == 110 {
+                        if peek(src, name_pos + 4) == 116 {
+                            if peek(src, name_pos + 5) == 95 {
+                                if peek(src, name_pos + 6) == 105 {
+                                    if peek(src, name_pos + 7) == 110 {
+                                        if peek(src, name_pos + 8) == 116 {
+                                            return 6;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // write_file (10 chars)
+    if name_len == 10 {
+        if peek(src, name_pos) == 119 {
+            if peek(src, name_pos + 1) == 114 {
+                if peek(src, name_pos + 2) == 105 {
+                    if peek(src, name_pos + 3) == 116 {
+                        if peek(src, name_pos + 4) == 101 {
+                            if peek(src, name_pos + 5) == 95 {
+                                if peek(src, name_pos + 6) == 102 {
+                                    if peek(src, name_pos + 7) == 105 {
+                                        if peek(src, name_pos + 8) == 108 {
+                                            if peek(src, name_pos + 9) == 101 {
+                                                return 9;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+
+// Builtin codegen: peek(ptr, off) -> u8
+// Emits: MOVZX EAX, BYTE [RCX+RDX] (0F B6 04 11)
+fn codegen_peek(st) {
+    emit(st, 15);   // 0x0F
+    emit(st, 182);  // 0xB6
+    emit(st, 4);    // 0x04 (ModR/M)
+    emit(st, 17);   // 0x11 (SIB: RCX+RDX)
+    return 0;
+}
+
+// Builtin codegen: poke(ptr, off, val)
+// Emits: MOV BYTE [RCX+RDX], R8B; XOR EAX, EAX
+fn codegen_poke(st) {
+    emit(st, 68);   // 0x44 (REX.R)
+    emit(st, 136);  // 0x88
+    emit(st, 4);    // 0x04 (ModR/M)
+    emit(st, 17);   // 0x11 (SIB)
+    emit(st, 49);   // 0x31 (XOR)
+    emit(st, 192);  // 0xC0 (EAX, EAX)
+    return 0;
+}
+
+// Builtin codegen: alloc(size) -> ptr
+// Calls VirtualAlloc via IAT
+fn codegen_alloc(st) {
+    // MOV RDX, RCX (48 89 CA)
+    emit(st, 72); emit(st, 137); emit(st, 202);
+    // XOR RCX, RCX (48 31 C9)
+    emit(st, 72); emit(st, 49); emit(st, 201);
+    // MOV R8D, 0x3000 (41 B8 00 30 00 00)
+    emit(st, 65); emit(st, 184); emit(st, 0); emit(st, 48); emit(st, 0); emit(st, 0);
+    // MOV R9D, 0x04 (41 B9 04 00 00 00)
+    emit(st, 65); emit(st, 185); emit(st, 4); emit(st, 0); emit(st, 0); emit(st, 0);
+    // SUB RSP, 32 (shadow space) (48 83 EC 20)
+    emit(st, 72); emit(st, 131); emit(st, 236); emit(st, 32);
+    // CALL VirtualAlloc (IAT index 7)
+    emit_iat_call(st, 7);
+    // ADD RSP, 32 (48 83 C4 20)
+    emit(st, 72); emit(st, 131); emit(st, 196); emit(st, 32);
+    return 0;
+}
+
+// Builtin codegen: strlen(ptr) -> i64
+fn codegen_strlen(st) {
+    // XOR RAX, RAX (48 31 C0)
+    emit(st, 72); emit(st, 49); emit(st, 192);
+    // .loop: CMP BYTE [RCX+RAX], 0 (80 3C 01 00)
+    emit(st, 128); emit(st, 60); emit(st, 1); emit(st, 0);
+    // JE .done (74 05) - skip 5 bytes
+    emit(st, 116); emit(st, 5);
+    // INC RAX (48 FF C0)
+    emit(st, 72); emit(st, 255); emit(st, 192);
+    // JMP .loop (EB F3) - back 13 bytes
+    emit(st, 235); emit(st, 243);
+    // .done: (RAX has length)
+    return 0;
+}
+
+// Builtin codegen: streq(s1, s2) -> bool
+fn codegen_streq(st) {
+    // .loop: MOVZX EAX, BYTE [RCX] (0F B6 01)
+    emit(st, 15); emit(st, 182); emit(st, 1);
+    // MOVZX R10D, BYTE [RDX] (44 0F B6 12)
+    emit(st, 68); emit(st, 15); emit(st, 182); emit(st, 18);
+    // CMP AL, R10B (44 38 D0)
+    emit(st, 68); emit(st, 56); emit(st, 208);
+    // JNE .not_equal (75 0C) - skip 12 bytes
+    emit(st, 117); emit(st, 12);
+    // TEST AL, AL (84 C0)
+    emit(st, 132); emit(st, 192);
+    // JZ .equal (74 0C) - skip 12 bytes
+    emit(st, 116); emit(st, 12);
+    // INC RCX (48 FF C1)
+    emit(st, 72); emit(st, 255); emit(st, 193);
+    // INC RDX (48 FF C2)
+    emit(st, 72); emit(st, 255); emit(st, 194);
+    // JMP .loop (EB E3) - back 29 bytes
+    emit(st, 235); emit(st, 227);
+    // .not_equal: XOR EAX, EAX (31 C0)
+    emit(st, 49); emit(st, 192);
+    // JMP .done (EB 05)
+    emit(st, 235); emit(st, 5);
+    // .equal: MOV EAX, 1 (B8 01 00 00 00)
+    emit(st, 184); emit(st, 1); emit(st, 0); emit(st, 0); emit(st, 0);
+    // .done:
+    return 0;
+}
+
+// Builtin codegen: print_int(val) - stub for now
+fn codegen_print_int(st) {
+    // Just return 0 for now (XOR RAX, RAX)
+    emit(st, 72); emit(st, 49); emit(st, 192);
+    return 0;
+}
+
+// Builtin codegen: read_file(path) - stub for now
+fn codegen_read_file(st) {
+    // Just return 0 for now (XOR RAX, RAX)
+    emit(st, 72); emit(st, 49); emit(st, 192);
+    return 0;
+}
+
+// Builtin codegen: file_len() - stub for now
+fn codegen_file_len(st) {
+    // Just return 0 (XOR RAX, RAX)
+    emit(st, 72); emit(st, 49); emit(st, 192);
+    return 0;
+}
+
+// Builtin codegen: write_file(filename, buffer, size) -> i64
+// Args at runtime: RCX (filename), RDX (buffer), R8 (size)
+// Returns: RAX = 0 on success, non-zero on error
+// Uses Windows API: CreateFileA, WriteFile, CloseHandle
+fn codegen_write_file(st) {
+    // Save buffer and size with PUSH before CreateFileA call
+    // PUSH RDX (52)
+    emit(st, 82);
+
+    // PUSH R8 (41 50)
+    emit(st, 65); emit(st, 80);
+
+    // SUB RSP, 64 (shadow space + 3 stack params + 8 align) (48 83 EC 40)
+    emit(st, 72); emit(st, 131); emit(st, 236); emit(st, 64);
+
+    // CreateFileA(filename, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    // RCX already has filename
+
+    // MOV EDX, 0x40000000 (GENERIC_WRITE) (BA 00 00 00 40)
+    emit(st, 186); emit(st, 0); emit(st, 0); emit(st, 0); emit(st, 64);
+
+    // XOR R8D, R8D (dwShareMode = 0) (45 31 C0)
+    emit(st, 69); emit(st, 49); emit(st, 192);
+
+    // XOR R9, R9 (lpSecurityAttributes = NULL) (45 31 C9)
+    emit(st, 69); emit(st, 49); emit(st, 201);
+
+    // MOV DWORD [RSP+32], 2 (CREATE_ALWAYS) (C7 44 24 20 02 00 00 00)
+    emit(st, 199); emit(st, 68); emit(st, 36); emit(st, 32);
+    emit(st, 2); emit(st, 0); emit(st, 0); emit(st, 0);
+
+    // MOV DWORD [RSP+40], 0x80 (FILE_ATTRIBUTE_NORMAL) (C7 44 24 28 80 00 00 00)
+    emit(st, 199); emit(st, 68); emit(st, 36); emit(st, 40);
+    emit(st, 128); emit(st, 0); emit(st, 0); emit(st, 0);
+
+    // MOV QWORD [RSP+48], 0 (hTemplateFile = NULL) (48 C7 44 24 30 00 00 00 00)
+    emit(st, 72); emit(st, 199); emit(st, 68); emit(st, 36); emit(st, 48);
+    emit(st, 0); emit(st, 0); emit(st, 0); emit(st, 0);
+
+    // CALL CreateFileA (IAT index 3)
+    emit_iat_call(st, 3);
+
+    // ADD RSP, 64 (cleanup CreateFileA stack) (48 83 C4 40)
+    emit(st, 72); emit(st, 131); emit(st, 196); emit(st, 64);
+
+    // Check if CreateFileA succeeded: CMP RAX, -1 (48 83 F8 FF)
+    emit(st, 72); emit(st, 131); emit(st, 248); emit(st, 255);
+
+    // JE .error (jump if INVALID_HANDLE_VALUE) (74 XX) - will patch
+    let error_jmp_pos = code_pos(st);
+    emit(st, 116); emit(st, 0); // Placeholder offset
+
+    // MOV RCX, RAX (handle for WriteFile) (48 89 C1)
+    emit(st, 72); emit(st, 137); emit(st, 193);
+
+    // POP R8 (size) (41 58)
+    emit(st, 65); emit(st, 88);
+
+    // POP RDX (buffer) (5A)
+    emit(st, 90);
+
+    // PUSH RCX (save handle for CloseHandle) (51)
+    emit(st, 81);
+
+    // SUB RSP, 40 (shadow space + lpNumberOfBytesWritten) (48 83 EC 28)
+    emit(st, 72); emit(st, 131); emit(st, 236); emit(st, 40);
+
+    // LEA R9, [RSP+8] (&bytesWritten) (4C 8D 4C 24 08)
+    emit(st, 76); emit(st, 141); emit(st, 76); emit(st, 36); emit(st, 8);
+
+    // MOV QWORD [RSP+32], 0 (lpOverlapped = NULL) (48 C7 44 24 20 00 00 00 00)
+    emit(st, 72); emit(st, 199); emit(st, 68); emit(st, 36); emit(st, 32);
+    emit(st, 0); emit(st, 0); emit(st, 0); emit(st, 0);
+
+    // CALL WriteFile (IAT index 2)
+    emit_iat_call(st, 2);
+
+    // ADD RSP, 40 (cleanup WriteFile stack) (48 83 C4 28)
+    emit(st, 72); emit(st, 131); emit(st, 196); emit(st, 40);
+
+    // POP RCX (handle) (59)
+    emit(st, 89);
+
+    // PUSH RAX (save WriteFile result) (50)
+    emit(st, 80);
+
+    // SUB RSP, 32 (shadow space for CloseHandle) (48 83 EC 20)
+    emit(st, 72); emit(st, 131); emit(st, 236); emit(st, 32);
+
+    // CALL CloseHandle (IAT index 5)
+    emit_iat_call(st, 5);
+
+    // ADD RSP, 32 (cleanup CloseHandle stack) (48 83 C4 20)
+    emit(st, 72); emit(st, 131); emit(st, 196); emit(st, 32);
+
+    // POP RAX (restore WriteFile result) (58)
+    emit(st, 88);
+
+    // TEST EAX, EAX (check WriteFile success) (85 C0)
+    emit(st, 133); emit(st, 192);
+
+    // JNZ .success (WriteFile returns non-zero on success) (75 03)
+    emit(st, 117); emit(st, 3);
+
+    // .error path: MOV EAX, 1 (return error code) (B8 01 00 00 00)
+    emit(st, 184); emit(st, 1); emit(st, 0); emit(st, 0); emit(st, 0);
+
+    // JMP .done (EB 03)
+    emit(st, 235); emit(st, 3);
+
+    // .success: XOR EAX, EAX (return 0 = success) (31 C0)
+    let success_pos = code_pos(st);
+    emit(st, 49); emit(st, 192);
+
+    // Patch the CreateFileA error jump offset
+    let current_pos = code_pos(st);
+    let offset = current_pos - error_jmp_pos - 2;
+    patch32(st, error_jmp_pos + 1, offset);
+
+    return 0;
+}
+
+// Dispatch builtin codegen based on ID
+fn codegen_builtin(st, builtin_id) {
+    if builtin_id == 1 { codegen_peek(st); return 0; }
+    if builtin_id == 2 { codegen_poke(st); return 0; }
+    if builtin_id == 3 { codegen_strlen(st); return 0; }
+    if builtin_id == 4 { codegen_streq(st); return 0; }
+    if builtin_id == 5 { codegen_alloc(st); return 0; }
+    if builtin_id == 6 { codegen_print_int(st); return 0; }
+    if builtin_id == 7 { codegen_read_file(st); return 0; }
+    if builtin_id == 8 { codegen_file_len(st); return 0; }
+    if builtin_id == 9 { codegen_write_file(st); return 0; }
+    return 0;
+}
+
+// ============================================================================
+// SECTION 9: PARSER - EXPRESSIONS
+// ============================================================================
+// Recursive descent parser for expressions with operator precedence.
+// Precedence: primary > mul/div > add/sub > comparison
+// Expression types: literals, identifiers, function calls, binary ops
+
+// Parse number literal
+fn parse_num(st) {
+    let src = mem_read_i64(st, S_SRC());
+    let pos = mem_read_i64(st, S_TPOS());
+    let len = mem_read_i64(st, S_TLEN());
+    let val = 0;
+    let i = 0;
+    while i < len {
+        let c = peek(src, pos + i);
+        val = val * 10 + (c - 48);
+        i = i + 1;
+    }
+    next_tok(st);
+    emit_rax_imm(st, val);
+    return 0;
+}
+
+// Parse identifier (var or call)
+fn parse_id(st) {
+    let tpos = mem_read_i64(st, S_TPOS());
+    let tlen = mem_read_i64(st, S_TLEN());
+    next_tok(st);
+
+    // Check for function call
+    if mem_read_i64(st, S_TOK()) == T_LPAREN() {
+        next_tok(st);
+        let argc = 0;
+        while mem_read_i64(st, S_TOK()) != T_RPAREN() {
+            parse_expr(st);
+            emit(st, 80);  // push rax
+            argc = argc + 1;
+            if mem_read_i64(st, S_TOK()) == T_COMMA() { next_tok(st); }
+        }
+        next_tok(st);  // skip )
+
+        // Pop args to regs
+        if argc >= 4 { emit(st, 65); emit(st, 89); }  // pop r9
+        if argc >= 3 { emit(st, 65); emit(st, 88); }  // pop r8
+        if argc >= 2 { emit(st, 90); }                // pop rdx
+        if argc >= 1 { emit(st, 89); }                // pop rcx
+
+        // Check if builtin
+        let builtin_id = is_builtin(st, tpos, tlen);
+        if builtin_id > 0 {
+            codegen_builtin(st, builtin_id);
+            return 0;
+        }
+
+        // Emit call rel32
+        emit(st, 232);
+        let patch = code_pos(st);
+        emit32(st, 0);
+
+        // Patch later or now if func defined
+        let idx = find_sym(st, tpos, tlen);
+        if idx >= 0 {
+            let foff = sym_off(st, idx);
+            let cp = code_pos(st);  // Workaround: avoid func call in expression
+            let rel = foff - cp;
+            patch32(st, patch, rel);
+        } else {
+            // Add to relocation table for later resolution (multi-file support)
+            add_reloc(st, patch, tpos, tlen);
+        }
+        return 0;
+    }
+
+    // Variable reference
+    let idx = find_sym(st, tpos, tlen);
+    if idx >= 0 {
+        let off = sym_off(st, idx);
+        // mov rax, [rbp - off]
+        emit(st, 72); emit(st, 139); emit(st, 133);
+        emit32(st, 0 - off);
+    } else {
+        // Undefined variable error
+        error_at(st, 0);
+    }
+    return 0;
+}
+
+// Parse primary
+fn parse_prim(st) {
+    let tok = mem_read_i64(st, S_TOK());
+    if tok == T_NUM() { parse_num(st); return 0; }
+    if tok == T_ID() { parse_id(st); return 0; }
+    if tok == T_LPAREN() {
+        next_tok(st);
+        parse_expr(st);
+        next_tok(st);  // skip )
+        return 0;
+    }
+    // Unary minus: -expr
+    if tok == T_MINUS() {
+        next_tok(st);
+        parse_prim(st);
+        // neg rax (48 F7 D8)
+        emit(st, 72); emit(st, 247); emit(st, 216);
+        return 0;
+    }
+    return 0;
+}
+
+// Parse mul/div
+fn parse_mul(st) {
+    parse_prim(st);
+    while 1 == 1 {
+        let tok = mem_read_i64(st, S_TOK());
+        if tok == T_STAR() {
+            next_tok(st);
+            emit(st, 80);  // push rax
+            parse_prim(st);
+            emit(st, 89);  // pop rcx
+            emit(st, 72); emit(st, 15); emit(st, 175); emit(st, 193);  // imul rax, rcx
+        } else {
+            if tok == T_SLASH() {
+                next_tok(st);
+                emit(st, 80);  // push rax
+                parse_prim(st);
+                emit(st, 89);  // pop rcx
+                emit(st, 72); emit(st, 145);  // xchg rax, rcx
+                emit(st, 72); emit(st, 153);  // cqo
+                emit(st, 72); emit(st, 247); emit(st, 249);  // idiv rcx
+            } else {
+                return 0;
+            }
+        }
+    }
+    return 0;
+}
+
+// Parse add/sub
+fn parse_add(st) {
+    parse_mul(st);
+    while 1 == 1 {
+        let tok = mem_read_i64(st, S_TOK());
+        if tok == T_PLUS() {
+            next_tok(st);
+            emit(st, 80);  // push rax
+            parse_mul(st);
+            emit(st, 89);  // pop rcx
+            emit(st, 72); emit(st, 1); emit(st, 200);  // add rax, rcx
+        } else {
+            if tok == T_MINUS() {
+                next_tok(st);
+                emit(st, 80);  // push rax
+                parse_mul(st);
+                emit(st, 89);  // pop rcx
+                emit(st, 72); emit(st, 41); emit(st, 193);  // sub rcx, rax
+                emit(st, 72); emit(st, 137); emit(st, 200);  // mov rax, rcx
+            } else {
+                return 0;
+            }
+        }
+    }
+    return 0;
+}
+
+// Parse comparison
+fn parse_cmp(st) {
+    parse_add(st);
+    let tok = mem_read_i64(st, S_TOK());
+    if tok == T_EQ() {
+        next_tok(st);
+        emit(st, 80);  // push rax
+        parse_add(st);
+        emit(st, 89);  // pop rcx
+        emit(st, 72); emit(st, 57); emit(st, 193);  // cmp rcx, rax
+        emit(st, 15); emit(st, 148); emit(st, 192);  // sete al
+        emit(st, 72); emit(st, 15); emit(st, 182); emit(st, 192);  // movzx rax, al
+    }
+    if tok == T_NE() {
+        next_tok(st);
+        emit(st, 80);
+        parse_add(st);
+        emit(st, 89);
+        emit(st, 72); emit(st, 57); emit(st, 193);
+        emit(st, 15); emit(st, 149); emit(st, 192);  // setne al
+        emit(st, 72); emit(st, 15); emit(st, 182); emit(st, 192);
+    }
+    if tok == T_LT() {
+        next_tok(st);
+        emit(st, 80);
+        parse_add(st);
+        emit(st, 89);
+        emit(st, 72); emit(st, 57); emit(st, 193);
+        emit(st, 15); emit(st, 156); emit(st, 192);  // setl al
+        emit(st, 72); emit(st, 15); emit(st, 182); emit(st, 192);
+    }
+    if tok == T_GT() {
+        next_tok(st);
+        emit(st, 80);
+        parse_add(st);
+        emit(st, 89);
+        emit(st, 72); emit(st, 57); emit(st, 193);
+        emit(st, 15); emit(st, 159); emit(st, 192);  // setg al
+        emit(st, 72); emit(st, 15); emit(st, 182); emit(st, 192);
+    }
+    if tok == T_LE() {
+        next_tok(st);
+        emit(st, 80);
+        parse_add(st);
+        emit(st, 89);
+        emit(st, 72); emit(st, 57); emit(st, 193);
+        emit(st, 15); emit(st, 158); emit(st, 192);  // setle al
+        emit(st, 72); emit(st, 15); emit(st, 182); emit(st, 192);
+    }
+    if tok == T_GE() {
+        next_tok(st);
+        emit(st, 80);
+        parse_add(st);
+        emit(st, 89);
+        emit(st, 72); emit(st, 57); emit(st, 193);
+        emit(st, 15); emit(st, 157); emit(st, 192);  // setge al
+        emit(st, 72); emit(st, 15); emit(st, 182); emit(st, 192);
+    }
+    return 0;
+}
+
+fn parse_expr(st) {
+    parse_cmp(st);
+    return 0;
+}
+
+// ============================================================================
+// SECTION 10: PARSER - STATEMENTS
+// ============================================================================
+// Parsers for XersLang statements: let, if/else, while, return
+// Statements can modify program state and control flow
+
+// Parse let statement (variable declaration with initialization)
+fn parse_let(st) {
+    next_tok(st);  // skip let
+    let npos = mem_read_i64(st, S_TPOS());
+    let nlen = mem_read_i64(st, S_TLEN());
+    next_tok(st);  // skip name
+    next_tok(st);  // skip =
+    parse_expr(st);
+    next_tok(st);  // skip ;
+
+    let locn = mem_read_i64(st, S_LOCN());
+    locn = locn + 1;
+    let off = locn * 8;
+    add_sym(st, npos, nlen, 0, off);
+    mem_write_i64(st, S_LOCN(), locn);
+
+    // mov [rbp - off], rax
+    emit(st, 72); emit(st, 137); emit(st, 133);
+    emit32(st, 0 - off);
+    return 0;
+}
+
+// Parse if
+fn parse_if(st) {
+    next_tok(st);  // skip if
+    parse_expr(st);
+
+    // test rax, rax; jz rel32
+    emit(st, 72); emit(st, 133); emit(st, 192);
+    emit(st, 15); emit(st, 132);
+    let jz_patch = code_pos(st);
+    emit32(st, 0);
+
+    next_tok(st);  // skip {
+    parse_block(st);
+    next_tok(st);  // skip }
+
+    if mem_read_i64(st, S_TOK()) == T_ELSE() {
+        next_tok(st);
+        emit(st, 233);  // jmp rel32
+        let jmp_patch = code_pos(st);
+        emit32(st, 0);
+
+        let cur = code_pos(st);
+        patch32(st, jz_patch, cur - jz_patch - 4);
+
+        next_tok(st);  // skip {
+        parse_block(st);
+        next_tok(st);  // skip }
+
+        let cur2 = code_pos(st);
+        patch32(st, jmp_patch, cur2 - jmp_patch - 4);
+    } else {
+        let cur = code_pos(st);
+        patch32(st, jz_patch, cur - jz_patch - 4);
+    }
+    return 0;
+}
+
+// Parse while
+fn parse_while(st) {
+    next_tok(st);  // skip while
+    let loop_start = code_pos(st);
+    parse_expr(st);
+
+    emit(st, 72); emit(st, 133); emit(st, 192);
+    emit(st, 15); emit(st, 132);
+    let jz_patch = code_pos(st);
+    emit32(st, 0);
+
+    next_tok(st);  // skip {
+    parse_block(st);
+    next_tok(st);  // skip }
+
+    // jmp loop_start
+    emit(st, 233);
+    let cur = code_pos(st);
+    emit32(st, loop_start - cur - 4);
+
+    let cur2 = code_pos(st);
+    patch32(st, jz_patch, cur2 - jz_patch - 4);
+    return 0;
+}
+
+// Parse return
+fn parse_ret(st) {
+    next_tok(st);  // skip return
+    parse_expr(st);
+    next_tok(st);  // skip ;
+    emit_epi(st);
+    return 0;
+}
+
+fn parse_stmt(st) {
+    let tok = mem_read_i64(st, S_TOK());
+    if tok == T_LET() { parse_let(st); return 0; }
+    if tok == T_IF() { parse_if(st); return 0; }
+    if tok == T_WHILE() { parse_while(st); return 0; }
+    if tok == T_RET() { parse_ret(st); return 0; }
+    // Expression statement
+    parse_expr(st);
+    next_tok(st);  // skip ;
+    return 0;
+}
+
+fn parse_block(st) {
+    while mem_read_i64(st, S_TOK()) != T_RBRACE() {
+        if mem_read_i64(st, S_TOK()) == T_EOF() { return 0; }
+        parse_stmt(st);
+    }
+    return 0;
+}
+
+// ============================================================================
+// SECTION 11: PARSER - FUNCTIONS AND PROGRAMS
+// ============================================================================
+// Parsers for function definitions and top-level program structure
+
+// Parse function definition
+fn parse_fn(st) {
+    next_tok(st);  // skip fn
+    let npos = mem_read_i64(st, S_TPOS());
+    let nlen = mem_read_i64(st, S_TLEN());
+    next_tok(st);  // skip name
+
+    let cpos = code_pos(st);
+    add_sym(st, npos, nlen, 1, cpos);
+
+    mem_write_i64(st, S_LOCN(), 0);
+
+    next_tok(st);  // skip (
+    let pcount = 0;
+    while mem_read_i64(st, S_TOK()) != T_RPAREN() {
+        let ppos = mem_read_i64(st, S_TPOS());
+        let plen = mem_read_i64(st, S_TLEN());
+        next_tok(st);
+        let poff = 16 + pcount * 8;
+        add_sym(st, ppos, plen, 2, poff);
+        pcount = pcount + 1;
+        if mem_read_i64(st, S_TOK()) == T_COMMA() { next_tok(st); }
+    }
+    next_tok(st);  // skip )
+    next_tok(st);  // skip {
+
+    emit_pro(st);
+
+    // Store params
+    if pcount >= 1 { emit(st, 72); emit(st, 137); emit(st, 77); emit(st, 16); }
+    if pcount >= 2 { emit(st, 72); emit(st, 137); emit(st, 85); emit(st, 24); }
+    if pcount >= 3 { emit(st, 76); emit(st, 137); emit(st, 69); emit(st, 32); }
+    if pcount >= 4 { emit(st, 76); emit(st, 137); emit(st, 77); emit(st, 40); }
+
+    parse_block(st);
+    next_tok(st);  // skip }
+
+    emit_rax_imm(st, 0);
+    emit_epi(st);
+    return 0;
+}
+
+// Parse program (with module system support)
+fn parse_prog(st) {
+    while mem_read_i64(st, S_TOK()) != T_EOF() {
+        let tok = mem_read_i64(st, S_TOK());
+        if tok == T_USE() {
+            parse_use_stmt(st);
+        } else {
+            if tok == T_MOD() {
+                parse_mod_decl(st);
+            } else {
+                if tok == T_FN() {
+                    parse_fn(st);
+                } else {
+                    if tok == T_PUB() {
+                        next_tok(st);
+                        if mem_read_i64(st, S_TOK()) == T_FN() {
+                            parse_fn(st);
+                        }
+                    } else {
+                        next_tok(st);
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+
+// ============================================================================
+// SECTION 11.5: MODULE SYSTEM
+// ============================================================================
+// Module import and resolution system for XersLang.
+// Supports: use std::io; and mod utils;
+// Modules are .xers files resolved relative to current file or std/ directory.
+
+// Module tracking: Each module entry is 256 bytes (path string)
+// Module buffer holds up to 64 modules (16KB total)
+
+// Check if module already loaded by comparing path strings
+fn is_module_loaded(st, path_buf, path_len) {
+    let modbuf = mem_read_i64(st, S_MODBUF());
+    let modn = mem_read_i64(st, S_MODN());
+    let i = 0;
+    while i < modn {
+        let mod_off = i * 256;
+        let matched = 1;
+        let j = 0;
+        while j < path_len {
+            let c1 = peek(path_buf, j);
+            let c2 = peek(modbuf, mod_off + j);
+            if c1 != c2 {
+                matched = 0;
+            }
+            j = j + 1;
+        }
+        if matched == 1 {
+            if peek(modbuf, mod_off + path_len) == 0 {
+                return 1;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Register a module as loaded
+fn register_module(st, path_buf, path_len) {
+    let modbuf = mem_read_i64(st, S_MODBUF());
+    let modn = mem_read_i64(st, S_MODN());
+    let mod_off = modn * 256;
+    let i = 0;
+    while i < path_len {
+        let c = peek(path_buf, i);
+        poke(modbuf, mod_off + i, c);
+        i = i + 1;
+    }
+    poke(modbuf, mod_off + path_len, 0);
+    mem_write_i64(st, S_MODN(), modn + 1);
+    return 0;
+}
+
+// Convert module path tokens to filesystem path
+// Example: std::io -> std/io.xers (path components separated by ::)
+fn build_module_path(st, path_buf) {
+    let src = mem_read_i64(st, S_SRC());
+    let tpos = mem_read_i64(st, S_TPOS());
+    let tlen = mem_read_i64(st, S_TLEN());
+    let out_pos = 0;
+
+    // Copy first identifier
+    let i = 0;
+    while i < tlen {
+        let c = peek(src, tpos + i);
+        poke(path_buf, out_pos, c);
+        out_pos = out_pos + 1;
+        i = i + 1;
+    }
+
+    next_tok(st);
+
+    // Process :: and additional path components
+    while mem_read_i64(st, S_TOK()) == T_COLONCOLON() {
+        poke(path_buf, out_pos, 47);
+        out_pos = out_pos + 1;
+        next_tok(st);
+
+        let tpos2 = mem_read_i64(st, S_TPOS());
+        let tlen2 = mem_read_i64(st, S_TLEN());
+        let j = 0;
+        while j < tlen2 {
+            let c = peek(src, tpos2 + j);
+            poke(path_buf, out_pos, c);
+            out_pos = out_pos + 1;
+            j = j + 1;
+        }
+        next_tok(st);
+    }
+
+    poke(path_buf, out_pos, 46);
+    out_pos = out_pos + 1;
+    poke(path_buf, out_pos, 120);
+    out_pos = out_pos + 1;
+    poke(path_buf, out_pos, 101);
+    out_pos = out_pos + 1;
+    poke(path_buf, out_pos, 114);
+    out_pos = out_pos + 1;
+    poke(path_buf, out_pos, 115);
+    out_pos = out_pos + 1;
+    poke(path_buf, out_pos, 0);
+
+    return out_pos;
+}
+
+// Parse use statement: use std::io;
+fn parse_use_stmt(st) {
+    next_tok(st);
+
+    let path_buf = alloc(512);
+    let path_len = build_module_path(st, path_buf);
+
+    if is_module_loaded(st, path_buf, path_len) == 0 {
+        register_module(st, path_buf, path_len);
+    }
+
+    return 0;
+}
+
+// Parse mod declaration: mod utils;
+fn parse_mod_decl(st) {
+    next_tok(st);
+
+    let src = mem_read_i64(st, S_SRC());
+    let tpos = mem_read_i64(st, S_TPOS());
+    let tlen = mem_read_i64(st, S_TLEN());
+
+    let path_buf = alloc(512);
+    let i = 0;
+    while i < tlen {
+        let c = peek(src, tpos + i);
+        poke(path_buf, i, c);
+        i = i + 1;
+    }
+    poke(path_buf, tlen, 46);
+    poke(path_buf, tlen + 1, 120);
+    poke(path_buf, tlen + 2, 101);
+    poke(path_buf, tlen + 3, 114);
+    poke(path_buf, tlen + 4, 115);
+    poke(path_buf, tlen + 5, 0);
+
+    let path_len = tlen + 5;
+
+    if is_module_loaded(st, path_buf, path_len) == 0 {
+        register_module(st, path_buf, path_len);
+    }
+
+    next_tok(st);
+    next_tok(st);
+
+    return 0;
+}
+
+// ============================================================================
+// SECTION 12: PE FILE WRITER
+// ============================================================================
+// Generates a valid Windows PE64 executable file with import table.
+// Structure: DOS header -> PE signature -> COFF header -> Optional header
+//            -> Section headers -> .text section -> .idata section
+// IAT indices: 0=ExitProcess, 1=GetStdHandle, 2=WriteFile, 3=CreateFileA,
+//              4=ReadFile, 5=CloseHandle, 6=GetFileSize, 7=VirtualAlloc
+
+fn write_pe(pe, code, csize) {
+    // Align code size to 512 for file alignment
+    let asize = csize;
+    if asize < 512 { asize = 512; }
+    let text_file_size = ((asize + 511) / 512) * 512;
+
+    // Calculate .idata RVA: .text RVA (0x1000) + code rounded to section alignment
+    let text_vsize = ((asize + 4095) / 4096) * 4096;
+    let idata_rva = 4096 + text_vsize;  // 0x1000 + text_vsize
+
+    // Image size = .idata RVA + .idata section size (0x1000)
+    let image_size = idata_rva + 4096;
+
+    // File offset for .idata = headers (512) + .text file size
+    let idata_file_off = 512 + text_file_size;
+
+    // DOS Header
+    poke(pe, 0, 77); poke(pe, 1, 90);  // MZ
+    mem_write_i16(pe, 2, 144);
+    mem_write_i16(pe, 4, 3);
+    mem_write_i16(pe, 8, 4);
+    mem_write_i16(pe, 60, 128);  // e_lfanew
+
+    // PE Signature
+    poke(pe, 128, 80); poke(pe, 129, 69);  // PE\0\0
+
+    // COFF Header
+    mem_write_i16(pe, 132, 34404);  // Machine: AMD64
+    mem_write_i16(pe, 134, 2);      // NumberOfSections: 2
+    mem_write_i32(pe, 148, 240);    // SizeOfOptionalHeader
+    mem_write_i16(pe, 150, 34);     // Characteristics
+
+    // Optional Header
+    mem_write_i16(pe, 152, 523);    // Magic: PE32+
+    poke(pe, 154, 14);              // Linker version
+    mem_write_i32(pe, 156, asize);  // SizeOfCode
+    mem_write_i32(pe, 168, 4096);   // AddressOfEntryPoint
+    mem_write_i32(pe, 172, 4096);   // BaseOfCode
+    mem_write_i64(pe, 176, 5368709120);  // ImageBase: 0x140000000
+    mem_write_i32(pe, 184, 4096);   // SectionAlignment
+    mem_write_i32(pe, 188, 512);    // FileAlignment
+    mem_write_i16(pe, 192, 6);      // MajorOSVersion
+    mem_write_i16(pe, 200, 6);      // MajorSubsystemVersion
+    mem_write_i32(pe, 208, image_size);  // SizeOfImage (dynamic)
+    mem_write_i32(pe, 212, 512);    // SizeOfHeaders
+    mem_write_i16(pe, 220, 3);      // Subsystem: CONSOLE
+    mem_write_i16(pe, 222, 33120);  // DllCharacteristics
+    mem_write_i64(pe, 224, 1048576);  // SizeOfStackReserve
+    mem_write_i64(pe, 232, 4096);   // SizeOfStackCommit
+    mem_write_i64(pe, 240, 1048576);  // SizeOfHeapReserve
+    mem_write_i64(pe, 248, 4096);   // SizeOfHeapCommit
+    mem_write_i32(pe, 260, 16);     // NumberOfRvaAndSizes
+
+    // Data Directory [1]: Import Table (at offset 272)
+    mem_write_i32(pe, 272, idata_rva);  // Import Directory RVA
+    mem_write_i32(pe, 276, 320);        // Import Directory Size (0x140)
+
+    // .text Section Header (at offset 392)
+    poke(pe, 392, 46); poke(pe, 393, 116); poke(pe, 394, 101);
+    poke(pe, 395, 120); poke(pe, 396, 116);  // ".text"
+    mem_write_i32(pe, 400, asize);      // VirtualSize
+    mem_write_i32(pe, 404, 4096);       // VirtualAddress: 0x1000
+    mem_write_i32(pe, 408, text_file_size);  // SizeOfRawData
+    mem_write_i32(pe, 412, 512);        // PointerToRawData
+    mem_write_i32(pe, 428, 1610612768); // Characteristics: CODE|EXECUTE|READ
+
+    // .idata Section Header (at offset 432)
+    poke(pe, 432, 46); poke(pe, 433, 105); poke(pe, 434, 100);
+    poke(pe, 435, 97); poke(pe, 436, 116); poke(pe, 437, 97);  // ".idata"
+    mem_write_i32(pe, 440, 512);        // VirtualSize
+    mem_write_i32(pe, 444, idata_rva);  // VirtualAddress (dynamic)
+    mem_write_i32(pe, 448, 512);        // SizeOfRawData
+    mem_write_i32(pe, 452, idata_file_off);  // PointerToRawData (dynamic)
+    mem_write_i32(pe, 468, 1073741888); // Characteristics: INITIALIZED_DATA|READ
+
+    // Copy code to .text section
+    let i = 0;
+    while i < csize {
+        let b = peek(code, i);
+        poke(pe, 512 + i, b);
+        i = i + 1;
+    }
+
+    // Build Import Section at idata_file_off
+    // Import Directory Table: 2 entries (kernel32 + null) = 40 bytes
+    // Entry 1: kernel32.dll
+    mem_write_i32(pe, idata_file_off + 0, idata_rva + 40);   // OriginalFirstThunk (ILT RVA)
+    mem_write_i32(pe, idata_file_off + 4, 0);                // TimeDateStamp
+    mem_write_i32(pe, idata_file_off + 8, 0);                // ForwarderChain
+    mem_write_i32(pe, idata_file_off + 12, idata_rva + 296); // Name RVA
+    mem_write_i32(pe, idata_file_off + 16, idata_rva + 112); // FirstThunk (IAT RVA)
+    // Entry 2: Null terminator (20 bytes of zeros - already zero)
+
+    // Import Lookup Table (ILT) at +40: 9 entries (8 funcs + null) = 72 bytes
+    mem_write_i64(pe, idata_file_off + 40, idata_rva + 184);  // ExitProcess
+    mem_write_i64(pe, idata_file_off + 48, idata_rva + 198);  // GetStdHandle
+    mem_write_i64(pe, idata_file_off + 56, idata_rva + 214);  // WriteFile
+    mem_write_i64(pe, idata_file_off + 64, idata_rva + 226);  // CreateFileA
+    mem_write_i64(pe, idata_file_off + 72, idata_rva + 240);  // ReadFile
+    mem_write_i64(pe, idata_file_off + 80, idata_rva + 252);  // CloseHandle
+    mem_write_i64(pe, idata_file_off + 88, idata_rva + 266);  // GetFileSize
+    mem_write_i64(pe, idata_file_off + 96, idata_rva + 280);  // VirtualAlloc
+    mem_write_i64(pe, idata_file_off + 104, 0);               // Null terminator
+
+    // Import Address Table (IAT) at +112: same as ILT (72 bytes)
+    mem_write_i64(pe, idata_file_off + 112, idata_rva + 184); // ExitProcess
+    mem_write_i64(pe, idata_file_off + 120, idata_rva + 198); // GetStdHandle
+    mem_write_i64(pe, idata_file_off + 128, idata_rva + 214); // WriteFile
+    mem_write_i64(pe, idata_file_off + 136, idata_rva + 226); // CreateFileA
+    mem_write_i64(pe, idata_file_off + 144, idata_rva + 240); // ReadFile
+    mem_write_i64(pe, idata_file_off + 152, idata_rva + 252); // CloseHandle
+    mem_write_i64(pe, idata_file_off + 160, idata_rva + 266); // GetFileSize
+    mem_write_i64(pe, idata_file_off + 168, idata_rva + 280); // VirtualAlloc
+    mem_write_i64(pe, idata_file_off + 176, 0);               // Null terminator
+
+    // Hint/Name Table at +184
+    // ExitProcess at +184 (hint=0 + "ExitProcess\0" = 14 bytes)
+    mem_write_i16(pe, idata_file_off + 184, 0);
+    poke(pe, idata_file_off + 186, 69); poke(pe, idata_file_off + 187, 120);
+    poke(pe, idata_file_off + 188, 105); poke(pe, idata_file_off + 189, 116);
+    poke(pe, idata_file_off + 190, 80); poke(pe, idata_file_off + 191, 114);
+    poke(pe, idata_file_off + 192, 111); poke(pe, idata_file_off + 193, 99);
+    poke(pe, idata_file_off + 194, 101); poke(pe, idata_file_off + 195, 115);
+    poke(pe, idata_file_off + 196, 115); poke(pe, idata_file_off + 197, 0);
+
+    // GetStdHandle at +198 (hint=0 + "GetStdHandle\0" = 16 bytes)
+    mem_write_i16(pe, idata_file_off + 198, 0);
+    poke(pe, idata_file_off + 200, 71); poke(pe, idata_file_off + 201, 101);
+    poke(pe, idata_file_off + 202, 116); poke(pe, idata_file_off + 203, 83);
+    poke(pe, idata_file_off + 204, 116); poke(pe, idata_file_off + 205, 100);
+    poke(pe, idata_file_off + 206, 72); poke(pe, idata_file_off + 207, 97);
+    poke(pe, idata_file_off + 208, 110); poke(pe, idata_file_off + 209, 100);
+    poke(pe, idata_file_off + 210, 108); poke(pe, idata_file_off + 211, 101);
+    poke(pe, idata_file_off + 212, 0); poke(pe, idata_file_off + 213, 0);
+
+    // WriteFile at +214 (hint=0 + "WriteFile\0" = 12 bytes)
+    mem_write_i16(pe, idata_file_off + 214, 0);
+    poke(pe, idata_file_off + 216, 87); poke(pe, idata_file_off + 217, 114);
+    poke(pe, idata_file_off + 218, 105); poke(pe, idata_file_off + 219, 116);
+    poke(pe, idata_file_off + 220, 101); poke(pe, idata_file_off + 221, 70);
+    poke(pe, idata_file_off + 222, 105); poke(pe, idata_file_off + 223, 108);
+    poke(pe, idata_file_off + 224, 101); poke(pe, idata_file_off + 225, 0);
+
+    // CreateFileA at +226 (hint=0 + "CreateFileA\0" = 14 bytes)
+    mem_write_i16(pe, idata_file_off + 226, 0);
+    poke(pe, idata_file_off + 228, 67); poke(pe, idata_file_off + 229, 114);
+    poke(pe, idata_file_off + 230, 101); poke(pe, idata_file_off + 231, 97);
+    poke(pe, idata_file_off + 232, 116); poke(pe, idata_file_off + 233, 101);
+    poke(pe, idata_file_off + 234, 70); poke(pe, idata_file_off + 235, 105);
+    poke(pe, idata_file_off + 236, 108); poke(pe, idata_file_off + 237, 101);
+    poke(pe, idata_file_off + 238, 65); poke(pe, idata_file_off + 239, 0);
+
+    // ReadFile at +240 (hint=0 + "ReadFile\0" = 12 bytes)
+    mem_write_i16(pe, idata_file_off + 240, 0);
+    poke(pe, idata_file_off + 242, 82); poke(pe, idata_file_off + 243, 101);
+    poke(pe, idata_file_off + 244, 97); poke(pe, idata_file_off + 245, 100);
+    poke(pe, idata_file_off + 246, 70); poke(pe, idata_file_off + 247, 105);
+    poke(pe, idata_file_off + 248, 108); poke(pe, idata_file_off + 249, 101);
+    poke(pe, idata_file_off + 250, 0); poke(pe, idata_file_off + 251, 0);
+
+    // CloseHandle at +252 (hint=0 + "CloseHandle\0" = 14 bytes)
+    mem_write_i16(pe, idata_file_off + 252, 0);
+    poke(pe, idata_file_off + 254, 67); poke(pe, idata_file_off + 255, 108);
+    poke(pe, idata_file_off + 256, 111); poke(pe, idata_file_off + 257, 115);
+    poke(pe, idata_file_off + 258, 101); poke(pe, idata_file_off + 259, 72);
+    poke(pe, idata_file_off + 260, 97); poke(pe, idata_file_off + 261, 110);
+    poke(pe, idata_file_off + 262, 100); poke(pe, idata_file_off + 263, 108);
+    poke(pe, idata_file_off + 264, 101); poke(pe, idata_file_off + 265, 0);
+
+    // GetFileSize at +266 (hint=0 + "GetFileSize\0" = 14 bytes)
+    mem_write_i16(pe, idata_file_off + 266, 0);
+    poke(pe, idata_file_off + 268, 71); poke(pe, idata_file_off + 269, 101);
+    poke(pe, idata_file_off + 270, 116); poke(pe, idata_file_off + 271, 70);
+    poke(pe, idata_file_off + 272, 105); poke(pe, idata_file_off + 273, 108);
+    poke(pe, idata_file_off + 274, 101); poke(pe, idata_file_off + 275, 83);
+    poke(pe, idata_file_off + 276, 105); poke(pe, idata_file_off + 277, 122);
+    poke(pe, idata_file_off + 278, 101); poke(pe, idata_file_off + 279, 0);
+
+    // VirtualAlloc at +280 (hint=0 + "VirtualAlloc\0" = 16 bytes)
+    mem_write_i16(pe, idata_file_off + 280, 0);
+    poke(pe, idata_file_off + 282, 86); poke(pe, idata_file_off + 283, 105);
+    poke(pe, idata_file_off + 284, 114); poke(pe, idata_file_off + 285, 116);
+    poke(pe, idata_file_off + 286, 117); poke(pe, idata_file_off + 287, 97);
+    poke(pe, idata_file_off + 288, 108); poke(pe, idata_file_off + 289, 65);
+    poke(pe, idata_file_off + 290, 108); poke(pe, idata_file_off + 291, 108);
+    poke(pe, idata_file_off + 292, 111); poke(pe, idata_file_off + 293, 99);
+    poke(pe, idata_file_off + 294, 0); poke(pe, idata_file_off + 295, 0);
+
+    // DLL Name at +296: "KERNEL32.dll\0"
+    poke(pe, idata_file_off + 296, 75); poke(pe, idata_file_off + 297, 69);
+    poke(pe, idata_file_off + 298, 82); poke(pe, idata_file_off + 299, 78);
+    poke(pe, idata_file_off + 300, 69); poke(pe, idata_file_off + 301, 76);
+    poke(pe, idata_file_off + 302, 51); poke(pe, idata_file_off + 303, 50);
+    poke(pe, idata_file_off + 304, 46); poke(pe, idata_file_off + 305, 100);
+    poke(pe, idata_file_off + 306, 108); poke(pe, idata_file_off + 307, 108);
+    poke(pe, idata_file_off + 308, 0);
+
+    return idata_file_off + 512;
+}
+
+// ============================================================================
+// SECTION 13: MAIN ENTRY POINT
+// ============================================================================
+// Orchestrates the entire compilation process:
+// 1. Allocate memory buffers
+// 2. Read source file (test.xers)
+// 3. Initialize compiler state
+// 4. Tokenize and parse
+// 5. Generate PE executable
+// 6. Output result
+
+// ============================================================================
+// SECTION 14: PHASE 2 - MODULAR LEXER HELPERS
+// ============================================================================
+// Standalone lexer helper functions for modular tokenization.
+// These provide a cleaner API alternative to the integrated next_tok().
+// Can be used for custom lexers or token stream manipulation.
+
+// T005: Character classification predicates
+// is_whitespace - returns 1 if char is whitespace (space, tab, newline, CR)
+fn is_whitespace(c) {
+    if c == 32 { return 1; }
+    if c == 9 { return 1; }
+    if c == 10 { return 1; }
+    if c == 13 { return 1; }
+    return 0;
+}
+
+fn is_digit_p2(c) {
+    if c >= 48 {
+        if c <= 57 { return 1; }
+    }
+    return 0;
+}
+
+fn is_alpha_p2(c) {
+    if c >= 65 {
+        if c <= 90 { return 1; }
+    }
+    if c >= 97 {
+        if c <= 122 { return 1; }
+    }
+    if c == 95 { return 1; }
+    return 0;
+}
+
+// T006: Whitespace and comment skipping
+// skip_whitespace - advances pos past all whitespace characters
+fn skip_whitespace(st) {
+    let src = mem_read_i64(st, S_SRC());
+    let len = mem_read_i64(st, S_LEN());
+    let pos = mem_read_i64(st, S_POS());
+
+    while pos < len {
+        let c = peek(src, pos);
+        if is_whitespace(c) == 0 {
+            mem_write_i64(st, S_POS(), pos);
+            return 0;
+        }
+        pos = pos + 1;
+    }
+    mem_write_i64(st, S_POS(), pos);
+    return 0;
+}
+
+// skip_line_comment - if current pos is //, advance to next newline
+fn skip_line_comment(st) {
+    let src = mem_read_i64(st, S_SRC());
+    let len = mem_read_i64(st, S_LEN());
+    let pos = mem_read_i64(st, S_POS());
+
+    if pos + 1 >= len { return 0; }
+
+    let c1 = peek(src, pos);
+    let c2 = peek(src, pos + 1);
+
+    if c1 == 47 {
+        if c2 == 47 {
+            pos = pos + 2;
+            while pos < len {
+                let c = peek(src, pos);
+                pos = pos + 1;
+                if c == 10 {
+                    mem_write_i64(st, S_POS(), pos);
+                    return 1;
+                }
+            }
+            mem_write_i64(st, S_POS(), pos);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// T007: Number literal parsing
+// read_number - reads sequence of digits, returns numeric value
+// Assumes current position is at a digit
+fn read_number(st) {
+    let src = mem_read_i64(st, S_SRC());
+    let len = mem_read_i64(st, S_LEN());
+    let pos = mem_read_i64(st, S_POS());
+    let val = 0;
+
+    while pos < len {
+        let c = peek(src, pos);
+        if is_digit_p2(c) == 0 {
+            mem_write_i64(st, S_POS(), pos);
+            return val;
+        }
+        val = val * 10 + (c - 48);
+        pos = pos + 1;
+    }
+    mem_write_i64(st, S_POS(), pos);
+    return val;
+}
+
+// T008: Identifier parsing with keyword detection
+// read_identifier - reads alpha/digit/underscore sequence
+// Returns keyword token type or T_ID
+// Stores identifier in token buffer (tpos, tlen)
+fn read_identifier(st) {
+    let src = mem_read_i64(st, S_SRC());
+    let len = mem_read_i64(st, S_LEN());
+    let pos = mem_read_i64(st, S_POS());
+    let start = pos;
+
+    while pos < len {
+        let c = peek(src, pos);
+        if is_alpha_p2(c) == 0 {
+            if is_digit_p2(c) == 0 {
+                let tlen = pos - start;
+                mem_write_i64(st, S_TPOS(), start);
+                mem_write_i64(st, S_TLEN(), tlen);
+                mem_write_i64(st, S_POS(), pos);
+
+                // Keyword detection
+                if tlen == 2 {
+                    let c0 = peek(src, start);
+                    let c1 = peek(src, start + 1);
+                    if c0 == 102 { if c1 == 110 { return T_FN(); } }
+                    if c0 == 105 { if c1 == 102 { return T_IF(); } }
+                }
+                if tlen == 3 {
+                    let c0 = peek(src, start);
+                    let c1 = peek(src, start + 1);
+                    let c2 = peek(src, start + 2);
+                    if c0 == 108 { if c1 == 101 { if c2 == 116 { return T_LET(); } } }
+                }
+                if tlen == 4 {
+                    let c0 = peek(src, start);
+                    let c1 = peek(src, start + 1);
+                    let c2 = peek(src, start + 2);
+                    let c3 = peek(src, start + 3);
+                    if c0 == 101 { if c1 == 108 { if c2 == 115 { if c3 == 101 { return T_ELSE(); } } } }
+                }
+                if tlen == 5 {
+                    let c0 = peek(src, start);
+                    let c1 = peek(src, start + 1);
+                    let c2 = peek(src, start + 2);
+                    let c3 = peek(src, start + 3);
+                    let c4 = peek(src, start + 4);
+                    if c0 == 119 { if c1 == 104 { if c2 == 105 { if c3 == 108 { if c4 == 101 { return T_WHILE(); } } } } }
+                }
+                if tlen == 6 {
+                    let c0 = peek(src, start);
+                    let c1 = peek(src, start + 1);
+                    let c2 = peek(src, start + 2);
+                    let c3 = peek(src, start + 3);
+                    let c4 = peek(src, start + 4);
+                    let c5 = peek(src, start + 5);
+                    if c0 == 114 { if c1 == 101 { if c2 == 116 { if c3 == 117 { if c4 == 114 { if c5 == 110 { return T_RET(); } } } } } }
+                }
+
+                return T_ID();
+            }
+        }
+        pos = pos + 1;
+    }
+
+    let tlen = pos - start;
+    mem_write_i64(st, S_TPOS(), start);
+    mem_write_i64(st, S_TLEN(), tlen);
+    mem_write_i64(st, S_POS(), pos);
+    return T_ID();
+}
+
+// T009: String literal parsing
+// read_string - reads quoted string, handles escape sequences
+// Returns length of string (excluding quotes)
+// Stores string content starting at returned position
+fn read_string(st) {
+    let src = mem_read_i64(st, S_SRC());
+    let len = mem_read_i64(st, S_LEN());
+    let pos = mem_read_i64(st, S_POS());
+
+    if pos >= len { return 0; }
+    let c = peek(src, pos);
+    if c != 34 { return 0; }
+
+    pos = pos + 1;
+    let start = pos;
+
+    while pos < len {
+        let ch = peek(src, pos);
+        if ch == 34 {
+            let slen = pos - start;
+            mem_write_i64(st, S_TPOS(), start);
+            mem_write_i64(st, S_TLEN(), slen);
+            mem_write_i64(st, S_POS(), pos + 1);
+            return slen;
+        }
+        if ch == 92 {
+            pos = pos + 2;
+        } else {
+            pos = pos + 1;
+        }
+    }
+
+    mem_write_i64(st, S_POS(), pos);
+    return 0;
+}
+
+// T010: Operator parsing
+// read_operator - detects single and double-char operators
+// Returns appropriate token type (T_PLUS, T_EQ, T_LE, etc)
+fn read_operator(st) {
+    let src = mem_read_i64(st, S_SRC());
+    let len = mem_read_i64(st, S_LEN());
+    let pos = mem_read_i64(st, S_POS());
+
+    if pos >= len { return T_EOF(); }
+
+    let c = peek(src, pos);
+
+    // Two-char operators
+    if pos + 1 < len {
+        let c2 = peek(src, pos + 1);
+
+        if c == 61 { if c2 == 61 { mem_write_i64(st, S_POS(), pos + 2); return T_EQ(); } }
+        if c == 33 { if c2 == 61 { mem_write_i64(st, S_POS(), pos + 2); return T_NE(); } }
+        if c == 60 { if c2 == 61 { mem_write_i64(st, S_POS(), pos + 2); return T_LE(); } }
+        if c == 62 { if c2 == 61 { mem_write_i64(st, S_POS(), pos + 2); return T_GE(); } }
+        if c == 38 { if c2 == 38 { mem_write_i64(st, S_POS(), pos + 2); return T_PLUS(); } }
+        if c == 124 { if c2 == 124 { mem_write_i64(st, S_POS(), pos + 2); return T_PLUS(); } }
+    }
+
+    // Single-char operators
+    mem_write_i64(st, S_POS(), pos + 1);
+    if c == 43 { return T_PLUS(); }
+    if c == 45 { return T_MINUS(); }
+    if c == 42 { return T_STAR(); }
+    if c == 47 { return T_SLASH(); }
+    if c == 61 { return T_ASSIGN(); }
+    if c == 60 { return T_LT(); }
+    if c == 62 { return T_GT(); }
+    if c == 123 { return T_LBRACE(); }
+    if c == 125 { return T_RBRACE(); }
+    if c == 40 { return T_LPAREN(); }
+    if c == 41 { return T_RPAREN(); }
+    if c == 59 { return T_SEMI(); }
+    if c == 44 { return T_COMMA(); }
+
+    return T_EOF();
+}
+
+// T011: Main tokenizer function
+// next_token - reads next token from source, updates state
+// Returns token type, stores token position/length
+// Integrates all helper functions above
+fn next_token(st) {
+    while 1 == 1 {
+        skip_whitespace(st);
+        let skipped = skip_line_comment(st);
+        if skipped == 0 {
+            let done = 0;
+        } else {
+            let continue_loop = 1;
+        }
+    }
+
+    let src = mem_read_i64(st, S_SRC());
+    let len = mem_read_i64(st, S_LEN());
+    let pos = mem_read_i64(st, S_POS());
+
+    if pos >= len {
+        mem_write_i64(st, S_TOK(), T_EOF());
+        mem_write_i64(st, S_TPOS(), pos);
+        mem_write_i64(st, S_TLEN(), 0);
+        return T_EOF();
+    }
+
+    let c = peek(src, pos);
+
+    if is_digit_p2(c) == 1 {
+        let start = pos;
+        let val = read_number(st);
+        let end = mem_read_i64(st, S_POS());
+        mem_write_i64(st, S_TOK(), T_NUM());
+        mem_write_i64(st, S_TPOS(), start);
+        mem_write_i64(st, S_TLEN(), end - start);
+        return T_NUM();
+    }
+
+    if is_alpha_p2(c) == 1 {
+        let tok = read_identifier(st);
+        mem_write_i64(st, S_TOK(), tok);
+        return tok;
+    }
+
+    if c == 34 {
+        read_string(st);
+        mem_write_i64(st, S_TOK(), T_NUM());
+        return T_NUM();
+    }
+
+    let tok = read_operator(st);
+    mem_write_i64(st, S_TOK(), tok);
+    mem_write_i64(st, S_TPOS(), pos);
+    mem_write_i64(st, S_TLEN(), 1);
+    return tok;
+}
+
+// T012: Tokenize entire source file
+// tokenize_all - tokenizes all source into token array
+// Returns number of tokens
+// Token array format: (type, pos, len) triplets
+// Requires token buffer allocated in state
+fn tokenize_all(st, token_buf, max_tokens) {
+    mem_write_i64(st, S_POS(), 0);
+    let count = 0;
+
+    while count < max_tokens {
+        let tok = next_token(st);
+        if tok == T_EOF() {
+            mem_write_i64(token_buf, count * 24, tok);
+            mem_write_i64(token_buf, count * 24 + 8, mem_read_i64(st, S_TPOS()));
+            mem_write_i64(token_buf, count * 24 + 16, mem_read_i64(st, S_TLEN()));
+            return count + 1;
+        }
+
+        mem_write_i64(token_buf, count * 24, tok);
+        mem_write_i64(token_buf, count * 24 + 8, mem_read_i64(st, S_TPOS()));
+        mem_write_i64(token_buf, count * 24 + 16, mem_read_i64(st, S_TLEN()));
+        count = count + 1;
+    }
+
+    return count;
+}
+
+// ============================================================================
+// SECTION 15: COMMAND-LINE ARGUMENT PARSING
+// ============================================================================
+
+// Copy string from src to dst, returns length
+fn str_copy(dst, src) {
+    let i = 0;
+    let ch = peek(src, i);
+    while ch != 0 {
+        poke(dst, i, ch);
+        i = i + 1;
+        ch = peek(src, i);
+    }
+    poke(dst, i, 0);
+    return i;
+}
+
+// Find position of last dot in string, returns -1 if not found
+fn find_last_dot(str) {
+    let len = strlen(str);
+    let i = len - 1;
+    while i >= 0 {
+        if peek(str, i) == 46 {  // '.' = 46
+            return i;
+        }
+        i = i - 1;
+    }
+    return -1;
+}
+
+// Parse first argument from command line
+// Windows command line format: "program.exe arg1 arg2 ..."
+// Returns pointer to allocated string with first argument, or 0 if none
+fn get_first_arg() {
+    // Note: GetCommandLineA is a Windows API that would need to be available
+    // For now, we'll use a simpler approach: check if an argument was passed
+    // This is a placeholder - actual implementation would need Windows API access
+
+    // Since we can't directly call GetCommandLineA without it being a builtin,
+    // we'll use a workaround: the caller can pass the filename via environment
+    // or we default to "test.xers"
+
+    // For now, return 0 to indicate no argument (will use default)
+    return 0;
+}
+
+// Replace .xers extension with .exe
+// Input: "foo.xers" -> Output: "foo.exe"
+fn make_output_filename(outbuf, infile) {
+    let dot_pos = find_last_dot(infile);
+
+    if dot_pos < 0 {
+        // No extension found, just append .exe
+        let len = str_copy(outbuf, infile);
+        poke(outbuf, len, 46);      // '.'
+        poke(outbuf, len + 1, 101); // 'e'
+        poke(outbuf, len + 2, 120); // 'x'
+        poke(outbuf, len + 3, 101); // 'e'
+        poke(outbuf, len + 4, 0);
+        return 0;
+    }
+
+    // Copy up to the dot
+    let i = 0;
+    while i < dot_pos {
+        poke(outbuf, i, peek(infile, i));
+        i = i + 1;
+    }
+
+    // Add .exe extension
+    poke(outbuf, i, 46);      // '.'
+    poke(outbuf, i + 1, 101); // 'e'
+    poke(outbuf, i + 2, 120); // 'x'
+    poke(outbuf, i + 3, 101); // 'e'
+    poke(outbuf, i + 4, 0);
+
+    return 0;
+}
+
+// ============================================================================
+// SECTION 16: MAIN ENTRY POINT
+// ============================================================================
+// Orchestrates the entire compilation process:
+// 1. Allocate memory buffers
+// 2. Read source file (from command line or default to test.xers)
+// 3. Initialize compiler state
+// 4. Tokenize and parse
+// 5. Generate PE executable
+// 6. Output result
+
+fn main() {
+    let st = alloc(256);
+    let src = alloc(1048576);
+    let code = alloc(524288);
+    let pe = alloc(524288);
+    let sym = alloc(65536);
+
+    if st == 0 { return 1; }
+
+    // Get input filename from command line or use default
+    let fname = alloc(64);
+    let arg = get_first_arg();
+
+    if arg == 0 {
+        // No argument provided, use default "test.xers"
+        poke(fname, 0, 116); poke(fname, 1, 101); poke(fname, 2, 115);
+        poke(fname, 3, 116); poke(fname, 4, 46); poke(fname, 5, 120);
+        poke(fname, 6, 101); poke(fname, 7, 114); poke(fname, 8, 115);
+        poke(fname, 9, 0);
+    }
+    if arg != 0 {
+        // Use argument as filename
+        str_copy(fname, arg);
+    }
+
+    let sdata = read_file(fname);
+    if sdata == 0 { return 2; }
+
+    let slen = strlen(sdata);
+
+    // Copy source to src buffer
+    let j = 0;
+    while j < slen {
+        let ch = peek(sdata, j);
+        poke(src, j, ch);
+        j = j + 1;
+    }
+
+    // Init state
+    mem_write_i64(st, S_POS(), 0);
+    mem_write_i64(st, S_LEN(), slen);
+    mem_write_i64(st, S_SRC(), src);
+    mem_write_i64(st, S_CODE(), code);
+    mem_write_i64(st, S_CPOS(), 0);
+    mem_write_i64(st, S_SYM(), sym);
+    mem_write_i64(st, S_SYMN(), 0);
+    mem_write_i64(st, S_LOCN(), 0);
+    mem_write_i64(st, S_LINE(), 1);
+    mem_write_i64(st, S_COL(), 1);
+    mem_write_i64(st, S_TLINE(), 1);
+    mem_write_i64(st, S_TCOL(), 1);
+    // Initialize module tracking buffer (16KB for 64 modules)
+    let mod_buf = alloc(16384);
+    mem_write_i64(st, S_MODBUF(), mod_buf);
+    mem_write_i64(st, S_MODN(), 0);
+
+
+    // Tokenize first
+    next_tok(st);
+
+    // Parse and generate code
+    parse_prog(st);
+
+    // Generate PE
+    let csize = code_pos(st);
+    let pesize = write_pe(pe, code, csize);
+
+    // Generate output filename based on input filename
+    // (e.g., "foo.xers" -> "foo.exe")
+    let outname = alloc(64);
+    make_output_filename(outname, fname);
+
+    let result = write_file(outname, pe, pesize);
+    if result != 0 {
+        return 3;
+    }
+
+    return 0;
+}
+// ============================================================================
+// PHASE 3A: AST-BASED PARSER (APPEND TO xersc.xers)
+// ============================================================================
+// This section implements a two-pass parser that builds an AST instead of
+// generating code directly. The AST can then be processed by a separate
+// code generation phase.
+//
+// AST Node Format (32 bytes):
+//   [0-7]   : node_type (AST_NUM, AST_BINOP, AST_LET, etc.)
+//   [8-15]  : value or child1 pointer
+//   [16-23] : child2 pointer or 0
+//   [24-31] : child3 pointer or 0 (for if-else)
+// ============================================================================
+
+// ============================================================================
+// SECTION 14: AST NODE TYPE CONSTANTS
+// ============================================================================
+
+fn AST_NUM() { return 100; }
+fn AST_ID() { return 101; }
+fn AST_BINOP() { return 102; }
+fn AST_CALL() { return 103; }
+fn AST_LET() { return 110; }
+fn AST_IF() { return 111; }
+fn AST_WHILE() { return 112; }
+fn AST_RETURN() { return 113; }
+fn AST_BLOCK() { return 114; }
+fn AST_FUNCTION() { return 115; }
+fn AST_PROGRAM() { return 116; }
+fn AST_ASSIGN() { return 117; }
+
+// Binary operator types
+fn OP_ADD() { return 1; }
+fn OP_SUB() { return 2; }
+fn OP_MUL() { return 3; }
+fn OP_DIV() { return 4; }
+fn OP_MOD() { return 5; }
+fn OP_EQ() { return 6; }
+fn OP_NE() { return 7; }
+fn OP_LT() { return 8; }
+fn OP_GT() { return 9; }
+fn OP_LE() { return 10; }
+fn OP_GE() { return 11; }
+fn OP_AND() { return 12; }
+fn OP_OR() { return 13; }
+
+// ============================================================================
+// SECTION 15: AST STATE MANAGEMENT
+// ============================================================================
+// Add AST buffer pointer to compiler state
+
+fn S_AST() { return 88; }       // AST buffer base pointer
+fn S_APOS() { return 96; }      // Current AST allocation position
+
+// ============================================================================
+// SECTION 16: AST NODE CREATION
+// ============================================================================
+
+// Allocate a new AST node and return its pointer
+fn ast_alloc(st) {
+    let ast = mem_read_i64(st, S_AST());
+    let pos = mem_read_i64(st, S_APOS());
+    let node = ast + pos;
+    mem_write_i64(st, S_APOS(), pos + 32);
+    return node;
+}
+
+// Create a number node
+fn ast_num(st, value) {
+    let node = ast_alloc(st);
+    mem_write_i64(node, 0, AST_NUM());
+    mem_write_i64(node, 8, value);
+    mem_write_i64(node, 16, 0);
+    mem_write_i64(node, 24, 0);
+    return node;
+}
+
+// Create an identifier node
+fn ast_id(st, name_pos, name_len) {
+    let node = ast_alloc(st);
+    mem_write_i64(node, 0, AST_ID());
+    mem_write_i64(node, 8, name_pos);
+    mem_write_i64(node, 16, name_len);
+    mem_write_i64(node, 24, 0);
+    return node;
+}
+
+// Create a binary operation node
+fn ast_binop(st, op, left, right) {
+    let node = ast_alloc(st);
+    mem_write_i64(node, 0, AST_BINOP());
+    mem_write_i64(node, 8, op);
+    mem_write_i64(node, 16, left);
+    mem_write_i64(node, 24, right);
+    return node;
+}
+
+// Create a function call node
+fn ast_call(st, name_pos, name_len, args_list) {
+    let node = ast_alloc(st);
+    mem_write_i64(node, 0, AST_CALL());
+    mem_write_i64(node, 8, name_pos);
+    mem_write_i64(node, 16, name_len);
+    mem_write_i64(node, 24, args_list);
+    return node;
+}
+
+// Create a let statement node
+fn ast_let(st, name_pos, name_len, init_expr) {
+    let node = ast_alloc(st);
+    mem_write_i64(node, 0, AST_LET());
+    mem_write_i64(node, 8, name_pos);
+    mem_write_i64(node, 16, name_len);
+    mem_write_i64(node, 24, init_expr);
+    return node;
+}
+
+// Create an if statement node
+fn ast_if(st, cond, then_block, else_block) {
+    let node = ast_alloc(st);
+    mem_write_i64(node, 0, AST_IF());
+    mem_write_i64(node, 8, cond);
+    mem_write_i64(node, 16, then_block);
+    mem_write_i64(node, 24, else_block);
+    return node;
+}
+
+// Create a while statement node
+fn ast_while(st, cond, body) {
+    let node = ast_alloc(st);
+    mem_write_i64(node, 0, AST_WHILE());
+    mem_write_i64(node, 8, cond);
+    mem_write_i64(node, 16, body);
+    mem_write_i64(node, 24, 0);
+    return node;
+}
+
+// Create a return statement node
+fn ast_return(st, expr) {
+    let node = ast_alloc(st);
+    mem_write_i64(node, 0, AST_RETURN());
+    mem_write_i64(node, 8, expr);
+    mem_write_i64(node, 16, 0);
+    mem_write_i64(node, 24, 0);
+    return node;
+}
+
+// Create a block node (list of statements)
+fn ast_block(st, stmt_list, stmt_count) {
+    let node = ast_alloc(st);
+    mem_write_i64(node, 0, AST_BLOCK());
+    mem_write_i64(node, 8, stmt_list);
+    mem_write_i64(node, 16, stmt_count);
+    mem_write_i64(node, 24, 0);
+    return node;
+}
+
+// Create a function node
+fn ast_function(st, name_pos, name_len, params, param_count, body) {
+    let node = ast_alloc(st);
+    mem_write_i64(node, 0, AST_FUNCTION());
+    mem_write_i64(node, 8, name_pos);
+    mem_write_i64(node, 16, name_len);
+    mem_write_i64(node, 24, params);
+    // Store param_count and body in another node
+    let meta = ast_alloc(st);
+    mem_write_i64(meta, 0, param_count);
+    mem_write_i64(meta, 8, body);
+    mem_write_i64(node, 24, meta);
+    return node;
+}
+
+// Create a program node (list of functions)
+fn ast_program(st, func_list, func_count) {
+    let node = ast_alloc(st);
+    mem_write_i64(node, 0, AST_PROGRAM());
+    mem_write_i64(node, 8, func_list);
+    mem_write_i64(node, 16, func_count);
+    mem_write_i64(node, 24, 0);
+    return node;
+}
+
+// ============================================================================
+// SECTION 17: NEW PARSER - EXPRESSIONS (AST-BASED)
+// ============================================================================
+
+// Forward declaration removed - parse_expr_new defined later
+
+// Parse atom: number or identifier
+fn parse_atom(st) {
+    let tok = mem_read_i64(st, S_TOK());
+
+    // Number literal
+    if tok == T_NUM() {
+        let src = mem_read_i64(st, S_SRC());
+        let pos = mem_read_i64(st, S_TPOS());
+        let len = mem_read_i64(st, S_TLEN());
+        let val = 0;
+        let i = 0;
+        while i < len {
+            let c = peek(src, pos + i);
+            val = val * 10 + (c - 48);
+            i = i + 1;
+        }
+        next_tok(st);
+        return ast_num(st, val);
+    }
+
+    // Identifier or function call
+    if tok == T_ID() {
+        let name_pos = mem_read_i64(st, S_TPOS());
+        let name_len = mem_read_i64(st, S_TLEN());
+        next_tok(st);
+
+        // Check for function call
+        if mem_read_i64(st, S_TOK()) == T_LPAREN() {
+            next_tok(st);
+
+            // Parse arguments
+            let args = alloc(256);  // Buffer for argument pointers
+            let argc = 0;
+
+            while mem_read_i64(st, S_TOK()) != T_RPAREN() {
+                let arg = parse_expr_new(st);
+                mem_write_i64(args, argc * 8, arg);
+                argc = argc + 1;
+                if mem_read_i64(st, S_TOK()) == T_COMMA() {
+                    next_tok(st);
+                }
+            }
+            next_tok(st);  // skip )
+
+            return ast_call(st, name_pos, name_len, args);
+        }
+
+        // Just an identifier
+        return ast_id(st, name_pos, name_len);
+    }
+
+    // Parenthesized expression
+    if tok == T_LPAREN() {
+        next_tok(st);
+        let expr = parse_expr_new(st);
+        next_tok(st);  // skip )
+        return expr;
+    }
+
+    // Error - return dummy node
+    return ast_num(st, 0);
+}
+
+// Get operator precedence
+fn get_precedence(tok) {
+    if tok == T_STAR() { return 12; }
+    if tok == T_SLASH() { return 12; }
+    if tok == T_PLUS() { return 11; }
+    if tok == T_MINUS() { return 11; }
+    if tok == T_EQ() { return 8; }
+    if tok == T_NE() { return 8; }
+    if tok == T_LT() { return 9; }
+    if tok == T_GT() { return 9; }
+    if tok == T_LE() { return 9; }
+    if tok == T_GE() { return 9; }
+    return 0;
+}
+
+// Map token to operator type
+fn tok_to_op(tok) {
+    if tok == T_PLUS() { return OP_ADD(); }
+    if tok == T_MINUS() { return OP_SUB(); }
+    if tok == T_STAR() { return OP_MUL(); }
+    if tok == T_SLASH() { return OP_DIV(); }
+    if tok == T_EQ() { return OP_EQ(); }
+    if tok == T_NE() { return OP_NE(); }
+    if tok == T_LT() { return OP_LT(); }
+    if tok == T_GT() { return OP_GT(); }
+    if tok == T_LE() { return OP_LE(); }
+    if tok == T_GE() { return OP_GE(); }
+    return 0;
+}
+
+// Parse binary expression with operator precedence
+fn parse_binary_expr(st, min_prec) {
+    let left = parse_atom(st);
+
+    while 1 == 1 {
+        let tok = mem_read_i64(st, S_TOK());
+        let prec = get_precedence(tok);
+
+        if prec < min_prec {
+            return left;
+        }
+
+        let op = tok_to_op(tok);
+        next_tok(st);
+
+        let right = parse_binary_expr(st, prec + 1);
+        left = ast_binop(st, op, left, right);
+    }
+
+    return left;
+}
+
+// Parse expression (wrapper)
+fn parse_expr_new(st) {
+    return parse_binary_expr(st, 0);
+}
+
+// ============================================================================
+// SECTION 18: NEW PARSER - STATEMENTS (AST-BASED)
+// ============================================================================
+
+// Forward declarations removed - functions defined later
+
+// Parse let statement: let x = expr;
+fn parse_let_stmt(st) {
+    next_tok(st);  // skip 'let'
+    let name_pos = mem_read_i64(st, S_TPOS());
+    let name_len = mem_read_i64(st, S_TLEN());
+    next_tok(st);  // skip name
+    next_tok(st);  // skip '='
+    let init = parse_expr_new(st);
+    next_tok(st);  // skip ';'
+    return ast_let(st, name_pos, name_len, init);
+}
+
+// Parse if statement: if expr { } else { }
+fn parse_if_stmt(st) {
+    next_tok(st);  // skip 'if'
+    let cond = parse_expr_new(st);
+    next_tok(st);  // skip '{'
+    let then_block = parse_block_new(st);
+    next_tok(st);  // skip '}'
+
+    let else_block = 0;
+    if mem_read_i64(st, S_TOK()) == T_ELSE() {
+        next_tok(st);  // skip 'else'
+        next_tok(st);  // skip '{'
+        else_block = parse_block_new(st);
+        next_tok(st);  // skip '}'
+    }
+
+    return ast_if(st, cond, then_block, else_block);
+}
+
+// Parse while statement: while expr { }
+fn parse_while_stmt(st) {
+    next_tok(st);  // skip 'while'
+    let cond = parse_expr_new(st);
+    next_tok(st);  // skip '{'
+    let body = parse_block_new(st);
+    next_tok(st);  // skip '}'
+    return ast_while(st, cond, body);
+}
+
+// Parse return statement: return expr;
+fn parse_return_stmt(st) {
+    next_tok(st);  // skip 'return'
+    let expr = parse_expr_new(st);
+    next_tok(st);  // skip ';'
+    return ast_return(st, expr);
+}
+
+// Parse statement (dispatch)
+fn parse_stmt_new(st) {
+    let tok = mem_read_i64(st, S_TOK());
+
+    if tok == T_LET() {
+        return parse_let_stmt(st);
+    }
+    if tok == T_IF() {
+        return parse_if_stmt(st);
+    }
+    if tok == T_WHILE() {
+        return parse_while_stmt(st);
+    }
+    if tok == T_RET() {
+        return parse_return_stmt(st);
+    }
+
+    // Expression statement
+    let expr = parse_expr_new(st);
+    next_tok(st);  // skip ';'
+    return expr;
+}
+
+// Parse block: { stmt* }
+fn parse_block_new(st) {
+    let stmts = alloc(2048);  // Buffer for statement pointers
+    let count = 0;
+
+    while mem_read_i64(st, S_TOK()) != T_RBRACE() {
+        if mem_read_i64(st, S_TOK()) == T_EOF() {
+            return ast_block(st, stmts, count);
+        }
+        let stmt = parse_stmt_new(st);
+        mem_write_i64(stmts, count * 8, stmt);
+        count = count + 1;
+    }
+
+    return ast_block(st, stmts, count);
+}
+
+// ============================================================================
+// SECTION 19: NEW PARSER - FUNCTIONS AND PROGRAMS (AST-BASED)
+// ============================================================================
+
+// Parse function definition
+fn parse_function(st) {
+    next_tok(st);  // skip 'fn'
+    let name_pos = mem_read_i64(st, S_TPOS());
+    let name_len = mem_read_i64(st, S_TLEN());
+    next_tok(st);  // skip name
+
+    next_tok(st);  // skip '('
+
+    // Parse parameters
+    let params = alloc(256);  // Buffer for parameter name info
+    let pcount = 0;
+
+    while mem_read_i64(st, S_TOK()) != T_RPAREN() {
+        let pname_pos = mem_read_i64(st, S_TPOS());
+        let pname_len = mem_read_i64(st, S_TLEN());
+        next_tok(st);
+
+        // Store parameter info (pos, len)
+        mem_write_i64(params, pcount * 16, pname_pos);
+        mem_write_i64(params, pcount * 16 + 8, pname_len);
+        pcount = pcount + 1;
+
+        if mem_read_i64(st, S_TOK()) == T_COMMA() {
+            next_tok(st);
+        }
+    }
+    next_tok(st);  // skip ')'
+
+    next_tok(st);  // skip '{'
+    let body = parse_block_new(st);
+    next_tok(st);  // skip '}'
+
+    return ast_function(st, name_pos, name_len, params, pcount, body);
+}
+
+// Parse program (top-level)
+fn parse_program(st) {
+    let funcs = alloc(1024);  // Buffer for function pointers
+    let fcount = 0;
+
+    while mem_read_i64(st, S_TOK()) != T_EOF() {
+        if mem_read_i64(st, S_TOK()) == T_FN() {
+            let func = parse_function(st);
+            mem_write_i64(funcs, fcount * 8, func);
+            fcount = fcount + 1;
+        } else {
+            next_tok(st);
+        }
+    }
+
+    return ast_program(st, funcs, fcount);
+}
+
+// ============================================================================
+// SECTION 20: ENHANCED SYMBOL TABLE
+// ============================================================================
+
+// Add symbol to symbol table (wrapper with better naming)
+fn add_symbol(st, name_pos, name_len, kind, offset) {
+    return add_sym(st, name_pos, name_len, kind, offset);
+}
+
+// Lookup symbol by name (wrapper with better naming)
+fn lookup_symbol(st, name_pos, name_len) {
+    return find_sym(st, name_pos, name_len);
+}
+
+// Get symbol kind by index
+fn symbol_kind(st, idx) {
+    return sym_kind(st, idx);
+}
+
+// Get symbol offset by index
+fn symbol_offset(st, idx) {
+    return sym_off(st, idx);
+}
+
+// ============================================================================
+// SECTION 21: AST TESTING AND DEBUG
+// ============================================================================
+
+// Initialize AST buffer in compiler state
+fn init_ast(st) {
+    let ast_buf = alloc(1048576);  // 1MB for AST nodes
+    mem_write_i64(st, S_AST(), ast_buf);
+    mem_write_i64(st, S_APOS(), 0);
+    return ast_buf;
+}
+
+// Test function to parse with AST
+fn test_parse_ast(st) {
+    // Initialize AST buffer
+    init_ast(st);
+
+    // Parse program into AST
+    let prog = parse_program(st);
+
+    return prog;
+}
+
+// ============================================================================
+// END OF PHASE 3A
+// ============================================================================
+// Usage:
+// 1. Call init_ast(st) to initialize AST buffer
+// 2. Call parse_program(st) to parse entire program into AST
+// 3. AST root node pointer is returned
+// 4. Use AST node structure to traverse and generate code
+// ============================================================================
+
+// ============================================================================
+// MULTI-FILE COMPILATION SUPPORT
+// ============================================================================
+
+// Helper: Count files in null-terminated file list
+fn count_files(filelist) {
+    let count = 0;
+    let pos = 0;
+    while 1 == 1 {
+        let ch = peek(filelist, pos);
+        if ch == 0 { return count; }
+        count = count + 1;
+        while peek(filelist, pos) != 0 {
+            pos = pos + 1;
+        }
+        pos = pos + 1;
+    }
+    return count;
+}
+
+// Helper: Get filename by index from file list
+fn get_filename(filelist, index, out_buf) {
+    let file_idx = 0;
+    let pos = 0;
+    while file_idx < index {
+        while peek(filelist, pos) != 0 {
+            pos = pos + 1;
+        }
+        pos = pos + 1;
+        file_idx = file_idx + 1;
+    }
+    let i = 0;
+    while peek(filelist, pos + i) != 0 {
+        poke(out_buf, i, peek(filelist, pos + i));
+        i = i + 1;
+    }
+    poke(out_buf, i, 0);
+    return i;
+}
+
+// Main function for multi-file compilation
+fn main_multi() {
+    // Allocate buffers
+    let st = alloc(256);
+    let src = alloc(1048576);
+    let code = alloc(524288);
+    let pe = alloc(524288);
+    let sym = alloc(65536);
+    let reloc = alloc(131072);
+    let filelist = alloc(4096);
+
+    if st == 0 { return 1; }
+
+    // Build file list: "mod1.xers" and "mod2.xers"
+    let fpos = 0;
+    poke(filelist, fpos, 109); fpos = fpos + 1;  // m
+    poke(filelist, fpos, 111); fpos = fpos + 1;  // o
+    poke(filelist, fpos, 100); fpos = fpos + 1;  // d
+    poke(filelist, fpos, 49);  fpos = fpos + 1;  // 1
+    poke(filelist, fpos, 46);  fpos = fpos + 1;  // .
+    poke(filelist, fpos, 120); fpos = fpos + 1;  // x
+    poke(filelist, fpos, 101); fpos = fpos + 1;  // e
+    poke(filelist, fpos, 114); fpos = fpos + 1;  // r
+    poke(filelist, fpos, 115); fpos = fpos + 1;  // s
+    poke(filelist, fpos, 0);   fpos = fpos + 1;
+
+    poke(filelist, fpos, 109); fpos = fpos + 1;  // m
+    poke(filelist, fpos, 111); fpos = fpos + 1;  // o
+    poke(filelist, fpos, 100); fpos = fpos + 1;  // d
+    poke(filelist, fpos, 50);  fpos = fpos + 1;  // 2
+    poke(filelist, fpos, 46);  fpos = fpos + 1;  // .
+    poke(filelist, fpos, 120); fpos = fpos + 1;  // x
+    poke(filelist, fpos, 101); fpos = fpos + 1;  // e
+    poke(filelist, fpos, 114); fpos = fpos + 1;  // r
+    poke(filelist, fpos, 115); fpos = fpos + 1;  // s
+    poke(filelist, fpos, 0);   fpos = fpos + 1;
+
+    poke(filelist, fpos, 0);  // End marker
+
+    // Initialize compiler state
+    mem_write_i64(st, S_CODE(), code);
+    mem_write_i64(st, S_CPOS(), 0);
+    mem_write_i64(st, S_SYM(), sym);
+    mem_write_i64(st, S_SYMN(), 0);
+    mem_write_i64(st, S_RELOC(), reloc);
+    mem_write_i64(st, S_RELOCN(), 0);
+
+    let num_files = count_files(filelist);
+    mem_write_i64(st, S_FILEN(), num_files);
+
+    // PASS 1: Compile each file
+    let file_idx = 0;
+    let fname = alloc(256);
+
+    while file_idx < num_files {
+        get_filename(filelist, file_idx, fname);
+        let sdata = read_file(fname);
+        if sdata == 0 { return 2; }
+        let slen = strlen(sdata);
+
+        // Copy to source buffer
+        let j = 0;
+        while j < slen {
+            poke(src, j, peek(sdata, j));
+            j = j + 1;
+        }
+
+        // Reset parser state for this file
+        mem_write_i64(st, S_POS(), 0);
+        mem_write_i64(st, S_LEN(), slen);
+        mem_write_i64(st, S_SRC(), src);
+        mem_write_i64(st, S_LINE(), 1);
+        mem_write_i64(st, S_COL(), 1);
+        mem_write_i64(st, S_TLINE(), 1);
+        mem_write_i64(st, S_TCOL(), 1);
+    // Initialize module tracking buffer (16KB for 64 modules)
+    let mod_buf = alloc(16384);
+    mem_write_i64(st, S_MODBUF(), mod_buf);
+    mem_write_i64(st, S_MODN(), 0);
+
+        mem_write_i64(st, S_LOCN(), 0);
+
+        next_tok(st);
+        parse_prog(st);
+
+        file_idx = file_idx + 1;
+    }
+
+    // PASS 2: Resolve forward references
+    resolve_relocs(st);
+
+    // Generate PE
+    let csize = code_pos(st);
+    let pesize = write_pe(pe, code, csize);
+
+    // Write output
+    let outname = alloc(64);
+    poke(outname, 0, 111);  // o
+    poke(outname, 1, 117);  // u
+    poke(outname, 2, 116);  // t
+    poke(outname, 3, 46);   // .
+    poke(outname, 4, 101);  // e
+    poke(outname, 5, 120);  // x
+    poke(outname, 6, 101);  // e
+    poke(outname, 7, 0);
+
+    let result = write_file(outname, pe, pesize);
+    if result != 0 { return 3; }
+
+    return 0;
+}
+
+// ============================================================================
+// END MULTI-FILE SUPPORT
+// ============================================================================

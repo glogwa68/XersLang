@@ -1,0 +1,49 @@
+# XersLang .gitignore
+
+# Executables and binaries
+*.exe
+*.bin
+*.obj
+*.map
+*.dll
+
+# Build artifacts
+xerslang-compiler/build/
+
+# IDE and editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+.cache/
+tmp/
+
+# Backup files
+*.bak
+*.backup
+*.orig
+
+# Test files
+xerslang-compiler/test_*.xers
+xerslang-compiler/*.txt
+xerslang-compiler/*.out
+
+# Scripts (user-specific)
+xerslang-compiler/*.ps1
+xerslang-compiler/*.bat
+xerslang-compiler/*.py
+
+# Keep only source files
+xerslang-compiler/*.xers
+!xerslang-compiler/xersc.xers
