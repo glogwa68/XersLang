@@ -2,7 +2,7 @@
   "name": "xerslang",
   "displayName": "XersLang",
   "description": "XersLang language support with Material Icon Theme integration",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "publisher": "xerslang",
   "icon": "icon.png",
   "engines": {
