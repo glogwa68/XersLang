@@ -2,7 +2,7 @@
   "name": "xerslang",
   "displayName": "XersLang",
   "description": "XersLang language support for Visual Studio Code",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "xerslang",
   "icon": "icon.png",
   "engines": {
@@ -98,14 +98,7 @@
           "description": "Traces the communication between VS Code and the language server."
         }
       }
-    },
-    "iconThemes": [
-      {
-        "id": "xerslang-icons",
-        "label": "XersLang Icons",
-        "path": "./icons/xers-icons.json"
-      }
-    ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
