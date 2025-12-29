@@ -1,0 +1,296 @@
+// ============================================================================
+// CLI Demo - Command Line Arguments Simulation
+// ============================================================================
+// XersLang example demonstrating command-line argument handling.
+// Since get_argc/get_arg builtins are not yet implemented, this example
+// shows how to simulate and process arguments using existing builtins.
+//
+// Usage: Compile and run to see argument processing in action.
+// ============================================================================
+
+// ============================================================================
+// SECTION 1: MEMORY UTILITIES
+// ============================================================================
+
+fn mem_write_i64(buf, off, val) {
+    poke(buf, off, val);
+    poke(buf, off + 1, val / 256);
+    poke(buf, off + 2, val / 65536);
+    poke(buf, off + 3, val / 16777216);
+    poke(buf, off + 4, val / 4294967296);
+    poke(buf, off + 5, val / 1099511627776);
+    poke(buf, off + 6, val / 281474976710656);
+    poke(buf, off + 7, val / 72057594037927936);
+    return 0;
+}
+
+fn mem_read_i64(buf, off) {
+    let b0 = peek(buf, off);
+    let b1 = peek(buf, off + 1);
+    let b2 = peek(buf, off + 2);
+    let b3 = peek(buf, off + 3);
+    let b4 = peek(buf, off + 4);
+    let b5 = peek(buf, off + 5);
+    let b6 = peek(buf, off + 6);
+    let b7 = peek(buf, off + 7);
+    return b0 + b1*256 + b2*65536 + b3*16777216 + b4*4294967296 + b5*1099511627776 + b6*281474976710656 + b7*72057594037927936;
+}
+
+// ============================================================================
+// SECTION 2: STRING UTILITIES
+// ============================================================================
+
+// Copy a null-terminated string from src to dst
+// Returns the length of the copied string
+fn str_copy(dst, dst_off, src, src_off) {
+    let i = 0;
+    let c = peek(src, src_off);
+    while c != 0 {
+        poke(dst, dst_off + i, c);
+        i = i + 1;
+        c = peek(src, src_off + i);
+    }
+    poke(dst, dst_off + i, 0);
+    return i;
+}
+
+// Print a null-terminated string character by character
+fn print_str(buf, off) {
+    let c = peek(buf, off);
+    while c != 0 {
+        // Print ASCII value (for debugging)
+        // In a real implementation, this would output to stdout
+        print_int(c);
+        off = off + 1;
+        c = peek(buf, off);
+    }
+    return 0;
+}
+
+// Print a newline (ASCII 10)
+fn print_newline() {
+    print_int(10);
+    return 0;
+}
+
+// ============================================================================
+// SECTION 3: ARGUMENT STORAGE STRUCTURE
+// ============================================================================
+// Structure for storing command-line arguments
+// Layout:
+//   - argc (8 bytes): Number of arguments
+//   - argv_ptrs (8 bytes each): Pointers to argument strings
+//   - string_buffer: Storage for argument strings
+
+fn ARGS_ARGC() { return 0; }
+fn ARGS_ARGV_START() { return 8; }
+fn ARGS_STRING_BUFFER() { return 256; }
+
+// ============================================================================
+// SECTION 4: ARGUMENT MANAGEMENT FUNCTIONS
+// ============================================================================
+
+// Initialize arguments structure
+fn args_init(args) {
+    mem_write_i64(args, ARGS_ARGC(), 0);
+    return 0;
+}
+
+// Get argument count
+fn get_argc(args) {
+    return mem_read_i64(args, ARGS_ARGC());
+}
+
+// Get argument at index (returns pointer to string)
+fn get_arg(args, index) {
+    let argc = mem_read_i64(args, ARGS_ARGC());
+    if index < 0 { return 0; }
+    if index >= argc { return 0; }
+    return mem_read_i64(args, ARGS_ARGV_START() + index * 8);
+}
+
+// Add an argument (for simulation purposes)
+fn add_arg(args, str_buf, str_off) {
+    let argc = mem_read_i64(args, ARGS_ARGC());
+
+    // Calculate where to store this string in the buffer
+    // Each string gets up to 64 bytes
+    let string_pos = ARGS_STRING_BUFFER() + argc * 64;
+
+    // Copy the string
+    let len = str_copy(args, string_pos, str_buf, str_off);
+
+    // Store pointer to this string in argv array
+    // Note: We store the offset from args base, not absolute pointer
+    mem_write_i64(args, ARGS_ARGV_START() + argc * 8, string_pos);
+
+    // Increment argc
+    mem_write_i64(args, ARGS_ARGC(), argc + 1);
+
+    return len;
+}
+
+// ============================================================================
+// SECTION 5: ARGUMENT STRING BUILDER
+// ============================================================================
+// Helper to build argument strings from ASCII codes
+
+fn build_string(buf, off, c1, c2, c3, c4, c5, c6, c7, c8) {
+    let i = 0;
+    if c1 != 0 { poke(buf, off + i, c1); i = i + 1; }
+    if c2 != 0 { poke(buf, off + i, c2); i = i + 1; }
+    if c3 != 0 { poke(buf, off + i, c3); i = i + 1; }
+    if c4 != 0 { poke(buf, off + i, c4); i = i + 1; }
+    if c5 != 0 { poke(buf, off + i, c5); i = i + 1; }
+    if c6 != 0 { poke(buf, off + i, c6); i = i + 1; }
+    if c7 != 0 { poke(buf, off + i, c7); i = i + 1; }
+    if c8 != 0 { poke(buf, off + i, c8); i = i + 1; }
+    poke(buf, off + i, 0);
+    return i;
+}
+
+// Build longer string (up to 16 chars)
+fn build_string_long(buf, off, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16) {
+    let i = 0;
+    if c1 != 0 { poke(buf, off + i, c1); i = i + 1; }
+    if c2 != 0 { poke(buf, off + i, c2); i = i + 1; }
+    if c3 != 0 { poke(buf, off + i, c3); i = i + 1; }
+    if c4 != 0 { poke(buf, off + i, c4); i = i + 1; }
+    if c5 != 0 { poke(buf, off + i, c5); i = i + 1; }
+    if c6 != 0 { poke(buf, off + i, c6); i = i + 1; }
+    if c7 != 0 { poke(buf, off + i, c7); i = i + 1; }
+    if c8 != 0 { poke(buf, off + i, c8); i = i + 1; }
+    if c9 != 0 { poke(buf, off + i, c9); i = i + 1; }
+    if c10 != 0 { poke(buf, off + i, c10); i = i + 1; }
+    if c11 != 0 { poke(buf, off + i, c11); i = i + 1; }
+    if c12 != 0 { poke(buf, off + i, c12); i = i + 1; }
+    if c13 != 0 { poke(buf, off + i, c13); i = i + 1; }
+    if c14 != 0 { poke(buf, off + i, c14); i = i + 1; }
+    if c15 != 0 { poke(buf, off + i, c15); i = i + 1; }
+    if c16 != 0 { poke(buf, off + i, c16); i = i + 1; }
+    poke(buf, off + i, 0);
+    return i;
+}
+
+// ============================================================================
+// SECTION 6: DEMO - ARGUMENT PROCESSING
+// ============================================================================
+
+fn print_separator() {
+    // Print "========" (ASCII: 61)
+    print_int(61);
+    print_int(61);
+    print_int(61);
+    print_int(61);
+    print_int(61);
+    print_int(61);
+    print_int(61);
+    print_int(61);
+    print_newline();
+    return 0;
+}
+
+fn print_argc_label() {
+    // Print "argc: " (ASCII: a=97, r=114, g=103, c=99, :=58, space=32)
+    print_int(97);
+    print_int(114);
+    print_int(103);
+    print_int(99);
+    print_int(58);
+    print_int(32);
+    return 0;
+}
+
+fn print_argv_label(index) {
+    // Print "argv[" (ASCII: a=97, r=114, g=103, v=118, [=91)
+    print_int(97);
+    print_int(114);
+    print_int(103);
+    print_int(118);
+    print_int(91);
+    print_int(48 + index);  // index as digit (0-9)
+    print_int(93);          // ]
+    print_int(58);          // :
+    print_int(32);          // space
+    return 0;
+}
+
+fn demo_arguments(args, temp) {
+    // Simulate adding command-line arguments
+    // These would normally come from the OS
+
+    // arg[0]: "program" (p=112, r=114, o=111, g=103, r=114, a=97, m=109)
+    build_string(temp, 0, 112, 114, 111, 103, 114, 97, 109, 0);
+    add_arg(args, temp, 0);
+
+    // arg[1]: "--help" (-=45, -=45, h=104, e=101, l=108, p=112)
+    build_string(temp, 0, 45, 45, 104, 101, 108, 112, 0, 0);
+    add_arg(args, temp, 0);
+
+    // arg[2]: "-v" (-=45, v=118)
+    build_string(temp, 0, 45, 118, 0, 0, 0, 0, 0, 0);
+    add_arg(args, temp, 0);
+
+    // arg[3]: "input.xers" (i=105, n=110, p=112, u=117, t=116, .=46, x=120, e=101, r=114, s=115)
+    build_string_long(temp, 0, 105, 110, 112, 117, 116, 46, 120, 101, 114, 115, 0, 0, 0, 0, 0, 0);
+    add_arg(args, temp, 0);
+
+    return 0;
+}
+
+fn process_arguments(args) {
+    let argc = get_argc(args);
+
+    print_separator();
+    print_argc_label();
+    print_int(argc);
+    print_newline();
+    print_separator();
+
+    // Iterate through all arguments
+    let i = 0;
+    while i < argc {
+        print_argv_label(i);
+
+        // Get pointer offset to argument string
+        let arg_off = get_arg(args, i);
+
+        // Print each character of the argument
+        let c = peek(args, arg_off);
+        while c != 0 {
+            print_int(c);
+            arg_off = arg_off + 1;
+            c = peek(args, arg_off);
+        }
+        print_newline();
+
+        i = i + 1;
+    }
+
+    print_separator();
+    return 0;
+}
+
+// ============================================================================
+// SECTION 7: MAIN ENTRY POINT
+// ============================================================================
+
+fn main() {
+    // Allocate memory for argument storage
+    // Need: 8 bytes for argc + 8*16 bytes for argv ptrs + 64*16 bytes for strings
+    // Total: approximately 1200 bytes, allocate 2048 for safety
+    let args = alloc(2048);
+    let temp = alloc(128);
+
+    // Initialize argument structure
+    args_init(args);
+
+    // Simulate command-line arguments
+    demo_arguments(args, temp);
+
+    // Process and display arguments
+    process_arguments(args);
+
+    // Return success
+    return 0;
+}

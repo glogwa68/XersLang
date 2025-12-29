@@ -1,68 +1,265 @@
-// xers-cloc: Count Lines of Code for XersLang source files
-// Counts total, blank, comment, and code lines
-// NOTE: file_len() is not implemented in xersc, so we read until null byte
+// ============================================================================
+// xslf.xers - XersLang Source Lister/Finder (XSLF) - OPTIMIZED VERSION
+// ============================================================================
+// A command-line tool to count lines of code in .xers source files.
+// Similar to CLOC (Count Lines Of Code) but specifically for XersLang.
+//
+// Usage: xslf.exe <folder>
+//
+// Features:
+// - Recursively scans directories for .xers files
+// - Counts total lines, code lines, comment lines, blank lines
+// - Displays summary report with file statistics
+// - Optimized memory management with reusable buffers
+//
+// Builtins used (implemented in xersc):
+// - get_argc() -> i64              : Get argument count
+// - get_arg(index) -> ptr          : Get argument string
+// - list_dir(pattern) -> handle    : Open directory listing
+// - dir_next(handle) -> ptr        : Get next directory entry
+// - dir_close(handle) -> i64       : Close directory handle
+// - is_dir(path) -> bool           : Check if path is directory
+// - is_file(path) -> bool          : Check if path is file
+// - path_join(base, name) -> ptr   : Join path components
+// - str_ends_with(str, suffix) -> bool : Check string suffix
+// - strlen(s) -> i64               : String length
+// - read_file(path) -> ptr         : Read file content
+// - alloc(size) -> ptr             : Allocate memory
+// - peek(ptr, off) -> byte         : Read byte
+// - poke(ptr, off, val) -> void    : Write byte
+// - print_int(n) -> void           : Print integer
+// ============================================================================
 
-fn is_whitespace(c) -> i64 {
-    if c == 32 { return 1; }  // space
-    if c == 9 { return 1; }   // tab
-    if c == 13 { return 1; }  // CR
+// ============================================================================
+// SECTION 1: CONSTANTS AND CONFIGURATION
+// ============================================================================
+
+// Maximum recursion depth to prevent infinite loops
+fn MAX_DEPTH() -> i64 { return 32; }
+
+// Stats buffer offsets (8 bytes each for i64 values)
+fn STAT_FILES() -> i64 { return 0; }
+fn STAT_LINES() -> i64 { return 8; }
+fn STAT_CODE() -> i64 { return 16; }
+fn STAT_BLANK() -> i64 { return 24; }
+fn STAT_COMMENT() -> i64 { return 32; }
+fn STAT_SIZE() -> i64 { return 40; }  // Total size of stats buffer
+
+// Character constants
+fn CHAR_NEWLINE() -> i64 { return 10; }
+fn CHAR_CR() -> i64 { return 13; }
+fn CHAR_SPACE() -> i64 { return 32; }
+fn CHAR_TAB() -> i64 { return 9; }
+fn CHAR_SLASH() -> i64 { return 47; }
+fn CHAR_BACKSLASH() -> i64 { return 92; }
+fn CHAR_DOT() -> i64 { return 46; }
+fn CHAR_STAR() -> i64 { return 42; }
+fn CHAR_NULL() -> i64 { return 0; }
+
+// ============================================================================
+// SECTION 2: MEMORY UTILITIES (64-bit read/write)
+// ============================================================================
+
+// Write 64-bit integer to buffer at offset (little-endian)
+fn mem_write_i64(buf, off, val) -> i64 {
+    poke(buf, off, val % 256);
+    poke(buf, off + 1, (val / 256) % 256);
+    poke(buf, off + 2, (val / 65536) % 256);
+    poke(buf, off + 3, (val / 16777216) % 256);
+    poke(buf, off + 4, (val / 4294967296) % 256);
+    poke(buf, off + 5, (val / 1099511627776) % 256);
+    poke(buf, off + 6, (val / 281474976710656) % 256);
+    poke(buf, off + 7, (val / 72057594037927936) % 256);
     return 0;
 }
 
-fn main() -> i64 {
-    let filename = "test.xers";
-    let content = read_file(filename);
+// Read 64-bit integer from buffer at offset (little-endian)
+fn mem_read_i64(buf, off) -> i64 {
+    let b0 = peek(buf, off);
+    let b1 = peek(buf, off + 1);
+    let b2 = peek(buf, off + 2);
+    let b3 = peek(buf, off + 3);
+    let b4 = peek(buf, off + 4);
+    let b5 = peek(buf, off + 5);
+    let b6 = peek(buf, off + 6);
+    let b7 = peek(buf, off + 7);
+    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216 +
+           b4 * 4294967296 + b5 * 1099511627776 +
+           b6 * 281474976710656 + b7 * 72057594037927936;
+}
 
+// ============================================================================
+// SECTION 3: STATS MANAGEMENT
+// ============================================================================
+
+// Initialize all stats counters to zero
+fn init_stats(stats) -> i64 {
+    mem_write_i64(stats, STAT_FILES(), 0);
+    mem_write_i64(stats, STAT_LINES(), 0);
+    mem_write_i64(stats, STAT_CODE(), 0);
+    mem_write_i64(stats, STAT_BLANK(), 0);
+    mem_write_i64(stats, STAT_COMMENT(), 0);
+    return 0;
+}
+
+// Increment file count
+fn inc_files(stats) -> i64 {
+    let v = mem_read_i64(stats, STAT_FILES());
+    mem_write_i64(stats, STAT_FILES(), v + 1);
+    return 0;
+}
+
+// Add to line counts
+fn add_stats(stats, total, code, blank, comment) -> i64 {
+    let v = mem_read_i64(stats, STAT_LINES());
+    mem_write_i64(stats, STAT_LINES(), v + total);
+
+    v = mem_read_i64(stats, STAT_CODE());
+    mem_write_i64(stats, STAT_CODE(), v + code);
+
+    v = mem_read_i64(stats, STAT_BLANK());
+    mem_write_i64(stats, STAT_BLANK(), v + blank);
+
+    v = mem_read_i64(stats, STAT_COMMENT());
+    mem_write_i64(stats, STAT_COMMENT(), v + comment);
+
+    return 0;
+}
+
+// ============================================================================
+// SECTION 4: STRING UTILITIES
+// ============================================================================
+
+// Copy string from src to dst, return length copied
+fn str_copy(dst, src) -> i64 {
+    let i = 0;
+    let c = peek(src, i);
+    while c != 0 {
+        poke(dst, i, c);
+        i = i + 1;
+        c = peek(src, i);
+    }
+    poke(dst, i, 0);
+    return i;
+}
+
+// Check if entry is "." or ".."
+fn is_dot_entry(name) -> i64 {
+    let c0 = peek(name, 0);
+    if c0 != CHAR_DOT() {
+        return 0;
+    }
+    let c1 = peek(name, 1);
+    // Check for "."
+    if c1 == 0 {
+        return 1;
+    }
+    // Check for ".."
+    if c1 == CHAR_DOT() {
+        let c2 = peek(name, 2);
+        if c2 == 0 {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Build wildcard pattern: path\*
+fn build_pattern(dst, path) -> i64 {
+    let len = str_copy(dst, path);
+    // Add backslash if not present and path is not empty
+    if len > 0 {
+        let last = peek(dst, len - 1);
+        if last != CHAR_BACKSLASH() {
+            poke(dst, len, CHAR_BACKSLASH());
+            len = len + 1;
+        }
+    }
+    poke(dst, len, CHAR_STAR());
+    poke(dst, len + 1, 0);
+    return len + 1;
+}
+
+// ============================================================================
+// SECTION 5: LINE COUNTING ALGORITHM
+// ============================================================================
+
+// Check if character is whitespace (space or tab)
+fn is_whitespace(c) -> i64 {
+    if c == CHAR_SPACE() { return 1; }
+    if c == CHAR_TAB() { return 1; }
+    return 0;
+}
+
+// Analyze a single line from content[start..end)
+// Returns: 0=code, 1=blank, 2=comment
+fn classify_line(content, start, end) -> i64 {
+    let j = start;
+
+    // Skip leading whitespace
+    while j < end {
+        let c = peek(content, j);
+        if is_whitespace(c) == 0 {
+            // Found non-whitespace
+            // Check for comment marker //
+            if c == CHAR_SLASH() {
+                let next = peek(content, j + 1);
+                if next == CHAR_SLASH() {
+                    return 2;  // Comment line
+                }
+            }
+            return 0;  // Code line
+        }
+        j = j + 1;
+    }
+
+    // All whitespace = blank line
+    return 1;
+}
+
+// Count lines in file content
+// Updates: total, code, blank, comment counts
+fn count_lines(content, stats) -> i64 {
     let total = 0;
+    let code = 0;
     let blank = 0;
     let comment = 0;
-    let code = 0;
 
     let i = 0;
     let line_start = 0;
-    let line_blank = 1;
-    let line_comment = 0;
 
-    // Read until null byte (file_len not implemented)
     let c = peek(content, i);
     while c != 0 {
-        if c == 10 {  // newline
+        if c == CHAR_NEWLINE() {
+            // Process line from line_start to i
+            let line_type = classify_line(content, line_start, i);
             total = total + 1;
-            if line_blank == 1 {
+
+            if line_type == 1 {
                 blank = blank + 1;
             } else {
-                if line_comment == 1 {
+                if line_type == 2 {
                     comment = comment + 1;
                 } else {
                     code = code + 1;
                 }
             }
-            line_blank = 1;
-            line_comment = 0;
+
             line_start = i + 1;
-        } else {
-            if is_whitespace(c) == 0 {
-                line_blank = 0;
-                // Check for // comment
-                if c == 47 {  // '/'
-                    let next = peek(content, i + 1);
-                    if next == 47 {
-                        line_comment = 1;
-                    }
-                }
-            }
         }
         i = i + 1;
         c = peek(content, i);
     }
 
-    // Count last line if it doesn't end with newline
+    // Handle last line without trailing newline
     if i > line_start {
+        let line_type = classify_line(content, line_start, i);
         total = total + 1;
-        if line_blank == 1 {
+
+        if line_type == 1 {
             blank = blank + 1;
         } else {
-            if line_comment == 1 {
+            if line_type == 2 {
                 comment = comment + 1;
             } else {
                 code = code + 1;
@@ -70,11 +267,146 @@ fn main() -> i64 {
         }
     }
 
-    // Print results
-    print_int(total);
+    // Update global stats
+    add_stats(stats, total, code, blank, comment);
+
+    return total;
+}
+
+// Process a single .xers file
+fn process_file(filepath, stats) -> i64 {
+    let content = read_file(filepath);
+    if content == 0 {
+        // Could not read file, skip silently
+        return 0;
+    }
+
+    inc_files(stats);
+    count_lines(content, stats);
+
+    return 1;
+}
+
+// ============================================================================
+// SECTION 6: DIRECTORY SCANNING (RECURSIVE)
+// ============================================================================
+
+// Scan directory recursively for .xers files
+fn scan_dir(path, stats, depth, pattern_buf, path_buf) -> i64 {
+    // Prevent infinite recursion
+    if depth > MAX_DEPTH() {
+        return 0;
+    }
+
+    // Build search pattern: path\*
+    build_pattern(pattern_buf, path);
+
+    // Open directory
+    let handle = list_dir(pattern_buf);
+    if handle == 0 {
+        return 0;
+    }
+
+    // Iterate through entries
+    let name = dir_next(handle);
+    while name != 0 {
+        // Skip "." and ".." entries
+        if is_dot_entry(name) == 0 {
+            // Build full path using path_join builtin
+            let full_path = path_join(path, name);
+
+            if is_dir(full_path) == 1 {
+                // Recurse into subdirectory
+                scan_dir(full_path, stats, depth + 1, pattern_buf, path_buf);
+            } else {
+                // Check if .xers file using str_ends_with builtin
+                if str_ends_with(name, ".xers") == 1 {
+                    process_file(full_path, stats);
+                }
+            }
+        }
+
+        // Get next entry
+        name = dir_next(handle);
+    }
+
+    // Close directory handle
+    dir_close(handle);
+
+    return 0;
+}
+
+// ============================================================================
+// SECTION 7: REPORT OUTPUT
+// ============================================================================
+
+fn print_report(stats) -> i64 {
+    let files = mem_read_i64(stats, STAT_FILES());
+    let lines = mem_read_i64(stats, STAT_LINES());
+    let code = mem_read_i64(stats, STAT_CODE());
+    let blank = mem_read_i64(stats, STAT_BLANK());
+    let comment = mem_read_i64(stats, STAT_COMMENT());
+
+    // Output format: files blank comment code total
+    // Each value printed on separate call to print_int
+    // User can format externally or we print sequentially
+
+    // Print: Files
+    print_int(files);
+
+    // Print: Blank lines
     print_int(blank);
+
+    // Print: Comment lines
     print_int(comment);
+
+    // Print: Code lines
     print_int(code);
+
+    // Print: Total lines
+    print_int(lines);
+
+    return 0;
+}
+
+// ============================================================================
+// SECTION 8: MAIN ENTRY POINT
+// ============================================================================
+
+fn main() -> i64 {
+    // Get command line arguments
+    let argc = get_argc();
+
+    // Check for folder argument
+    if argc < 2 {
+        // No argument provided - return error code 1
+        // In a full implementation, would print usage message
+        return 1;
+    }
+
+    // Get folder path from argument 1
+    let folder = get_arg(1);
+
+    // Verify folder exists and is a directory
+    if is_dir(folder) == 0 {
+        // Not a valid directory - return error code 2
+        return 2;
+    }
+
+    // Allocate stats buffer (40 bytes = 5 * 8-byte counters)
+    let stats = alloc(STAT_SIZE());
+    init_stats(stats);
+
+    // Allocate reusable buffers for path building
+    // These are passed through recursion to avoid repeated allocation
+    let pattern_buf = alloc(2048);
+    let path_buf = alloc(2048);
+
+    // Scan directory tree
+    scan_dir(folder, stats, 0, pattern_buf, path_buf);
+
+    // Print report
+    print_report(stats);
 
     return 0;
 }

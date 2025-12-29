@@ -1,0 +1,504 @@
+// ============================================================================
+// File Finder - Search Files by Pattern
+// ============================================================================
+// XersLang example demonstrating file searching with pattern matching.
+// Searches a directory for files matching a given suffix pattern.
+//
+// Features demonstrated:
+// - String manipulation (copy, compare, ends_with)
+// - Pattern matching using suffix comparison
+// - Directory traversal (simulated)
+// - Error handling patterns
+// ============================================================================
+
+// ============================================================================
+// SECTION 1: MEMORY UTILITIES
+// ============================================================================
+
+fn mem_write_i64(buf, off, val) {
+    poke(buf, off, val);
+    poke(buf, off + 1, val / 256);
+    poke(buf, off + 2, val / 65536);
+    poke(buf, off + 3, val / 16777216);
+    poke(buf, off + 4, val / 4294967296);
+    poke(buf, off + 5, val / 1099511627776);
+    poke(buf, off + 6, val / 281474976710656);
+    poke(buf, off + 7, val / 72057594037927936);
+    return 0;
+}
+
+fn mem_read_i64(buf, off) {
+    let b0 = peek(buf, off);
+    let b1 = peek(buf, off + 1);
+    let b2 = peek(buf, off + 2);
+    let b3 = peek(buf, off + 3);
+    let b4 = peek(buf, off + 4);
+    let b5 = peek(buf, off + 5);
+    let b6 = peek(buf, off + 6);
+    let b7 = peek(buf, off + 7);
+    return b0 + b1*256 + b2*65536 + b3*16777216 + b4*4294967296 + b5*1099511627776 + b6*281474976710656 + b7*72057594037927936;
+}
+
+// ============================================================================
+// SECTION 2: STRING UTILITIES
+// ============================================================================
+
+// Calculate length of null-terminated string
+fn str_len(buf, off) {
+    let len = 0;
+    while peek(buf, off + len) != 0 {
+        len = len + 1;
+    }
+    return len;
+}
+
+// Copy string from src to dst, returns length
+fn str_copy(dst, dst_off, src, src_off) {
+    let i = 0;
+    let c = peek(src, src_off);
+    while c != 0 {
+        poke(dst, dst_off + i, c);
+        i = i + 1;
+        c = peek(src, src_off + i);
+    }
+    poke(dst, dst_off + i, 0);
+    return i;
+}
+
+// Check if two strings are equal
+// Returns 1 if equal, 0 if not
+fn str_equal(buf1, off1, buf2, off2) {
+    let i = 0;
+    let c1 = peek(buf1, off1);
+    let c2 = peek(buf2, off2);
+
+    while c1 != 0 {
+        if c1 != c2 {
+            return 0;
+        }
+        i = i + 1;
+        c1 = peek(buf1, off1 + i);
+        c2 = peek(buf2, off2 + i);
+    }
+
+    // Check if both strings ended
+    if c2 != 0 {
+        return 0;
+    }
+    return 1;
+}
+
+// Check if string ends with given suffix
+// Returns 1 if true, 0 if false
+fn str_ends_with(buf, str_off, suffix_buf, suffix_off) {
+    let str_len_val = str_len(buf, str_off);
+    let suffix_len = str_len(suffix_buf, suffix_off);
+
+    if suffix_len > str_len_val {
+        return 0;
+    }
+
+    let start = str_len_val - suffix_len;
+    let i = 0;
+    while i < suffix_len {
+        let c1 = peek(buf, str_off + start + i);
+        let c2 = peek(suffix_buf, suffix_off + i);
+        if c1 != c2 {
+            return 0;
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
+// Check if string starts with given prefix
+// Returns 1 if true, 0 if false
+fn str_starts_with(buf, str_off, prefix_buf, prefix_off) {
+    let i = 0;
+    let c1 = peek(prefix_buf, prefix_off);
+
+    while c1 != 0 {
+        let c2 = peek(buf, str_off + i);
+        if c1 != c2 {
+            return 0;
+        }
+        i = i + 1;
+        c1 = peek(prefix_buf, prefix_off + i);
+    }
+    return 1;
+}
+
+// Join two path components with separator
+fn path_join(dst, dst_off, path1, p1_off, path2, p2_off) {
+    let pos = 0;
+
+    // Copy first path
+    let c = peek(path1, p1_off);
+    while c != 0 {
+        poke(dst, dst_off + pos, c);
+        pos = pos + 1;
+        p1_off = p1_off + 1;
+        c = peek(path1, p1_off);
+    }
+
+    // Add separator (backslash for Windows)
+    poke(dst, dst_off + pos, 92);
+    pos = pos + 1;
+
+    // Copy second path
+    c = peek(path2, p2_off);
+    while c != 0 {
+        poke(dst, dst_off + pos, c);
+        pos = pos + 1;
+        p2_off = p2_off + 1;
+        c = peek(path2, p2_off);
+    }
+
+    poke(dst, dst_off + pos, 0);
+    return pos;
+}
+
+// ============================================================================
+// SECTION 3: SEARCH RESULTS STRUCTURE
+// ============================================================================
+// Structure for storing search results
+// Layout:
+//   - count (8 bytes): Number of matches found
+//   - max_results (8 bytes): Maximum results to store
+//   - results array: Each result is a path string (max 128 bytes each)
+
+fn RESULTS_COUNT() { return 0; }
+fn RESULTS_MAX() { return 8; }
+fn RESULTS_ARRAY() { return 16; }
+fn RESULT_SIZE() { return 128; }
+
+fn results_init(results, max_results) {
+    mem_write_i64(results, RESULTS_COUNT(), 0);
+    mem_write_i64(results, RESULTS_MAX(), max_results);
+    return 0;
+}
+
+fn results_add(results, path_buf, path_off) {
+    let count = mem_read_i64(results, RESULTS_COUNT());
+    let max_res = mem_read_i64(results, RESULTS_MAX());
+
+    if count >= max_res {
+        return 0;  // Results full
+    }
+
+    // Calculate offset for this result
+    let result_off = RESULTS_ARRAY() + count * RESULT_SIZE();
+
+    // Copy path
+    str_copy(results, result_off, path_buf, path_off);
+
+    // Increment count
+    mem_write_i64(results, RESULTS_COUNT(), count + 1);
+    return 1;
+}
+
+fn results_get(results, index, dest, dest_off) {
+    let count = mem_read_i64(results, RESULTS_COUNT());
+    if index >= count {
+        return 0;
+    }
+
+    let result_off = RESULTS_ARRAY() + index * RESULT_SIZE();
+    return str_copy(dest, dest_off, results, result_off);
+}
+
+fn results_count(results) {
+    return mem_read_i64(results, RESULTS_COUNT());
+}
+
+// ============================================================================
+// SECTION 4: SIMULATED FILE SYSTEM
+// ============================================================================
+// Simulated file entries for demonstration
+
+fn ENTRY_TYPE() { return 0; }
+fn ENTRY_NAME() { return 8; }
+fn ENTRY_SIZE() { return 72; }
+fn TYPE_END() { return 0; }
+fn TYPE_FILE() { return 1; }
+fn TYPE_DIR() { return 2; }
+
+fn build_file_entry(files, idx, name_buf, name_off) {
+    let base = idx * ENTRY_SIZE();
+    mem_write_i64(files, base + ENTRY_TYPE(), TYPE_FILE());
+    str_copy(files, base + ENTRY_NAME(), name_buf, name_off);
+    return 0;
+}
+
+fn build_dir_entry(files, idx, name_buf, name_off) {
+    let base = idx * ENTRY_SIZE();
+    mem_write_i64(files, base + ENTRY_TYPE(), TYPE_DIR());
+    str_copy(files, base + ENTRY_NAME(), name_buf, name_off);
+    return 0;
+}
+
+fn build_end_entry(files, idx) {
+    let base = idx * ENTRY_SIZE();
+    mem_write_i64(files, base + ENTRY_TYPE(), TYPE_END());
+    return 0;
+}
+
+fn build_test_files(files, temp) {
+    let idx = 0;
+
+    // main.xers
+    poke(temp, 0, 109); poke(temp, 1, 97); poke(temp, 2, 105); poke(temp, 3, 110);
+    poke(temp, 4, 46); poke(temp, 5, 120); poke(temp, 6, 101); poke(temp, 7, 114);
+    poke(temp, 8, 115); poke(temp, 9, 0);
+    build_file_entry(files, idx, temp, 0);
+    idx = idx + 1;
+
+    // parser.xers
+    poke(temp, 0, 112); poke(temp, 1, 97); poke(temp, 2, 114); poke(temp, 3, 115);
+    poke(temp, 4, 101); poke(temp, 5, 114); poke(temp, 6, 46); poke(temp, 7, 120);
+    poke(temp, 8, 101); poke(temp, 9, 114); poke(temp, 10, 115); poke(temp, 11, 0);
+    build_file_entry(files, idx, temp, 0);
+    idx = idx + 1;
+
+    // lexer.xers
+    poke(temp, 0, 108); poke(temp, 1, 101); poke(temp, 2, 120); poke(temp, 3, 101);
+    poke(temp, 4, 114); poke(temp, 5, 46); poke(temp, 6, 120); poke(temp, 7, 101);
+    poke(temp, 8, 114); poke(temp, 9, 115); poke(temp, 10, 0);
+    build_file_entry(files, idx, temp, 0);
+    idx = idx + 1;
+
+    // config.json
+    poke(temp, 0, 99); poke(temp, 1, 111); poke(temp, 2, 110); poke(temp, 3, 102);
+    poke(temp, 4, 105); poke(temp, 5, 103); poke(temp, 6, 46); poke(temp, 7, 106);
+    poke(temp, 8, 115); poke(temp, 9, 111); poke(temp, 10, 110); poke(temp, 11, 0);
+    build_file_entry(files, idx, temp, 0);
+    idx = idx + 1;
+
+    // readme.md
+    poke(temp, 0, 114); poke(temp, 1, 101); poke(temp, 2, 97); poke(temp, 3, 100);
+    poke(temp, 4, 109); poke(temp, 5, 101); poke(temp, 6, 46); poke(temp, 7, 109);
+    poke(temp, 8, 100); poke(temp, 9, 0);
+    build_file_entry(files, idx, temp, 0);
+    idx = idx + 1;
+
+    // utils.xers
+    poke(temp, 0, 117); poke(temp, 1, 116); poke(temp, 2, 105); poke(temp, 3, 108);
+    poke(temp, 4, 115); poke(temp, 5, 46); poke(temp, 6, 120); poke(temp, 7, 101);
+    poke(temp, 8, 114); poke(temp, 9, 115); poke(temp, 10, 0);
+    build_file_entry(files, idx, temp, 0);
+    idx = idx + 1;
+
+    // test.xers
+    poke(temp, 0, 116); poke(temp, 1, 101); poke(temp, 2, 115); poke(temp, 3, 116);
+    poke(temp, 4, 46); poke(temp, 5, 120); poke(temp, 6, 101); poke(temp, 7, 114);
+    poke(temp, 8, 115); poke(temp, 9, 0);
+    build_file_entry(files, idx, temp, 0);
+    idx = idx + 1;
+
+    // build.ps1
+    poke(temp, 0, 98); poke(temp, 1, 117); poke(temp, 2, 105); poke(temp, 3, 108);
+    poke(temp, 4, 100); poke(temp, 5, 46); poke(temp, 6, 112); poke(temp, 7, 115);
+    poke(temp, 8, 49); poke(temp, 9, 0);
+    build_file_entry(files, idx, temp, 0);
+    idx = idx + 1;
+
+    // codegen.xers
+    poke(temp, 0, 99); poke(temp, 1, 111); poke(temp, 2, 100); poke(temp, 3, 101);
+    poke(temp, 4, 103); poke(temp, 5, 101); poke(temp, 6, 110); poke(temp, 7, 46);
+    poke(temp, 8, 120); poke(temp, 9, 101); poke(temp, 10, 114); poke(temp, 11, 115);
+    poke(temp, 12, 0);
+    build_file_entry(files, idx, temp, 0);
+    idx = idx + 1;
+
+    // End marker
+    build_end_entry(files, idx);
+
+    return idx;
+}
+
+// ============================================================================
+// SECTION 5: SEARCH FUNCTION
+// ============================================================================
+
+fn find_files(files, suffix_buf, suffix_off, results, base_path, base_off, temp) {
+    let idx = 0;
+    let base = 0;
+    let entry_type = mem_read_i64(files, base + ENTRY_TYPE());
+
+    while entry_type != TYPE_END() {
+        if entry_type == TYPE_FILE() {
+            // Get file name
+            str_copy(temp, 0, files, base + ENTRY_NAME());
+
+            // Check if name ends with suffix
+            if str_ends_with(temp, 0, suffix_buf, suffix_off) == 1 {
+                // Build full path
+                let path_buf = alloc(256);
+                path_join(path_buf, 0, base_path, base_off, temp, 0);
+
+                // Add to results
+                results_add(results, path_buf, 0);
+            }
+        }
+
+        idx = idx + 1;
+        base = idx * ENTRY_SIZE();
+        entry_type = mem_read_i64(files, base + ENTRY_TYPE());
+    }
+
+    return results_count(results);
+}
+
+// ============================================================================
+// SECTION 6: OUTPUT UTILITIES
+// ============================================================================
+
+fn print_newline() {
+    print_int(10);
+    return 0;
+}
+
+fn print_str_direct(buf, off) {
+    let c = peek(buf, off);
+    while c != 0 {
+        print_int(c);
+        off = off + 1;
+        c = peek(buf, off);
+    }
+    return 0;
+}
+
+fn print_header() {
+    // Print "=== File Finder Demo ==="
+    print_int(61); print_int(61); print_int(61); print_int(32);  // "=== "
+    print_int(70); print_int(105); print_int(108); print_int(101);  // "File"
+    print_int(32);  // " "
+    print_int(70); print_int(105); print_int(110); print_int(100);  // "Find"
+    print_int(101); print_int(114);  // "er"
+    print_int(32);  // " "
+    print_int(68); print_int(101); print_int(109); print_int(111);  // "Demo"
+    print_int(32); print_int(61); print_int(61); print_int(61);  // " ==="
+    print_newline();
+    print_newline();
+    return 0;
+}
+
+fn print_searching(suffix_buf, suffix_off) {
+    // Print "Searching for files ending with: "
+    print_int(83); print_int(101); print_int(97); print_int(114);  // "Sear"
+    print_int(99); print_int(104); print_int(105); print_int(110);  // "chin"
+    print_int(103); print_int(32);  // "g "
+    print_int(102); print_int(111); print_int(114); print_int(32);  // "for "
+    print_int(42);  // "*"
+    print_str_direct(suffix_buf, suffix_off);
+    print_newline();
+    print_newline();
+    return 0;
+}
+
+fn print_found_header() {
+    // Print "Found files:"
+    print_int(70); print_int(111); print_int(117); print_int(110);  // "Foun"
+    print_int(100); print_int(32);  // "d "
+    print_int(102); print_int(105); print_int(108); print_int(101);  // "file"
+    print_int(115); print_int(58);  // "s:"
+    print_newline();
+    return 0;
+}
+
+fn print_result_line(num, path_buf, path_off) {
+    print_int(32); print_int(32);  // "  "
+    print_int(91);  // "["
+    print_int(48 + num);  // number as digit
+    print_int(93); print_int(32);  // "] "
+    print_str_direct(path_buf, path_off);
+    print_newline();
+    return 0;
+}
+
+fn print_summary(count) {
+    print_newline();
+    // Print "Total: X files found"
+    print_int(84); print_int(111); print_int(116); print_int(97);  // "Tota"
+    print_int(108); print_int(58); print_int(32);  // "l: "
+    print_int(48 + count);  // count as digit
+    print_int(32);  // " "
+    print_int(102); print_int(105); print_int(108); print_int(101);  // "file"
+    print_int(115); print_int(32);  // "s "
+    print_int(102); print_int(111); print_int(117); print_int(110);  // "foun"
+    print_int(100);  // "d"
+    print_newline();
+    return 0;
+}
+
+fn print_no_files() {
+    // Print "No files found matching pattern"
+    print_int(78); print_int(111); print_int(32);  // "No "
+    print_int(102); print_int(105); print_int(108); print_int(101);  // "file"
+    print_int(115); print_int(32);  // "s "
+    print_int(102); print_int(111); print_int(117); print_int(110);  // "foun"
+    print_int(100);  // "d"
+    print_newline();
+    return 0;
+}
+
+// ============================================================================
+// SECTION 7: MAIN ENTRY POINT
+// ============================================================================
+
+fn main() {
+    // Allocate memory
+    let files = alloc(4096);      // Simulated file list
+    let results = alloc(4096);    // Search results
+    let temp = alloc(256);        // Temporary buffer
+    let suffix_buf = alloc(32);   // Suffix pattern
+    let base_path = alloc(128);   // Base path
+    let path_buf = alloc(256);    // Path buffer for results
+
+    // Initialize search suffix: ".xers"
+    poke(suffix_buf, 0, 46);   // .
+    poke(suffix_buf, 1, 120);  // x
+    poke(suffix_buf, 2, 101);  // e
+    poke(suffix_buf, 3, 114);  // r
+    poke(suffix_buf, 4, 115);  // s
+    poke(suffix_buf, 5, 0);    // null
+
+    // Initialize base path: "src"
+    poke(base_path, 0, 115);   // s
+    poke(base_path, 1, 114);   // r
+    poke(base_path, 2, 99);    // c
+    poke(base_path, 3, 0);     // null
+
+    // Initialize results (max 20 results)
+    results_init(results, 20);
+
+    // Build test file structure
+    build_test_files(files, temp);
+
+    // Print header
+    print_header();
+
+    // Print what we're searching for
+    print_searching(suffix_buf, 0);
+
+    // Perform search
+    let count = find_files(files, suffix_buf, 0, results, base_path, 0, temp);
+
+    if count > 0 {
+        // Print results
+        print_found_header();
+
+        let i = 0;
+        while i < count {
+            results_get(results, i, path_buf, 0);
+            print_result_line(i + 1, path_buf, 0);
+            i = i + 1;
+        }
+
+        print_summary(count);
+    } else {
+        print_no_files();
+    }
+
+    return 0;
+}

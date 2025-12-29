@@ -1,15 +1,16 @@
 {
   "name": "xerslang",
   "displayName": "XersLang",
-  "description": "XersLang language support for Visual Studio Code",
-  "version": "0.2.1",
+  "description": "XersLang language support with Material Icon Theme integration",
+  "version": "0.3.2",
   "publisher": "xerslang",
   "icon": "icon.png",
   "engines": {
     "vscode": "^1.80.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Themes"
   ],
   "keywords": [
     "xers",
@@ -24,6 +25,20 @@
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
+    "themes": [
+      {
+        "label": "XersLang Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/xerslang-dark-color-theme.json"
+      }
+    ],
+    "iconThemes": [
+      {
+        "id": "xerslang-material-icons",
+        "label": "XersLang Material Icons",
+        "path": "./xerslang-material-icons.json"
+      }
+    ],
     "languages": [
       {
         "id": "xerslang",

@@ -1,0 +1,438 @@
+// ============================================================================
+// Directory Walker - Recursive Directory Traversal
+// ============================================================================
+// XersLang example demonstrating directory traversal concepts.
+// Since list_dir/dir_next/dir_close builtins are not yet implemented,
+// this example shows how such traversal would work conceptually and
+// provides simulated directory structures for demonstration.
+//
+// When native directory builtins are added, this code can be easily
+// adapted to use them.
+// ============================================================================
+
+// ============================================================================
+// SECTION 1: MEMORY UTILITIES
+// ============================================================================
+
+fn mem_write_i64(buf, off, val) {
+    poke(buf, off, val);
+    poke(buf, off + 1, val / 256);
+    poke(buf, off + 2, val / 65536);
+    poke(buf, off + 3, val / 16777216);
+    poke(buf, off + 4, val / 4294967296);
+    poke(buf, off + 5, val / 1099511627776);
+    poke(buf, off + 6, val / 281474976710656);
+    poke(buf, off + 7, val / 72057594037927936);
+    return 0;
+}
+
+fn mem_read_i64(buf, off) {
+    let b0 = peek(buf, off);
+    let b1 = peek(buf, off + 1);
+    let b2 = peek(buf, off + 2);
+    let b3 = peek(buf, off + 3);
+    let b4 = peek(buf, off + 4);
+    let b5 = peek(buf, off + 5);
+    let b6 = peek(buf, off + 6);
+    let b7 = peek(buf, off + 7);
+    return b0 + b1*256 + b2*65536 + b3*16777216 + b4*4294967296 + b5*1099511627776 + b6*281474976710656 + b7*72057594037927936;
+}
+
+// ============================================================================
+// SECTION 2: STRING UTILITIES
+// ============================================================================
+
+// Calculate length of null-terminated string
+fn str_len(buf, off) {
+    let len = 0;
+    while peek(buf, off + len) != 0 {
+        len = len + 1;
+    }
+    return len;
+}
+
+// Copy string from src to dst, returns length
+fn str_copy(dst, dst_off, src, src_off) {
+    let i = 0;
+    let c = peek(src, src_off);
+    while c != 0 {
+        poke(dst, dst_off + i, c);
+        i = i + 1;
+        c = peek(src, src_off + i);
+    }
+    poke(dst, dst_off + i, 0);
+    return i;
+}
+
+// Check if string ends with given suffix
+// Returns 1 if true, 0 if false
+fn str_ends_with(buf, str_off, suffix_buf, suffix_off) {
+    let str_len_val = str_len(buf, str_off);
+    let suffix_len = str_len(suffix_buf, suffix_off);
+
+    if suffix_len > str_len_val {
+        return 0;
+    }
+
+    let start = str_len_val - suffix_len;
+    let i = 0;
+    while i < suffix_len {
+        let c1 = peek(buf, str_off + start + i);
+        let c2 = peek(suffix_buf, suffix_off + i);
+        if c1 != c2 {
+            return 0;
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
+// Join two path components with separator
+// path_join(dst, dst_off, path1, p1_off, path2, p2_off)
+fn path_join(dst, dst_off, path1, p1_off, path2, p2_off) {
+    let pos = 0;
+
+    // Copy first path
+    let c = peek(path1, p1_off);
+    while c != 0 {
+        poke(dst, dst_off + pos, c);
+        pos = pos + 1;
+        p1_off = p1_off + 1;
+        c = peek(path1, p1_off);
+    }
+
+    // Add separator (backslash = 92 for Windows, slash = 47 for Unix)
+    poke(dst, dst_off + pos, 92);
+    pos = pos + 1;
+
+    // Copy second path
+    c = peek(path2, p2_off);
+    while c != 0 {
+        poke(dst, dst_off + pos, c);
+        pos = pos + 1;
+        p2_off = p2_off + 1;
+        c = peek(path2, p2_off);
+    }
+
+    poke(dst, dst_off + pos, 0);
+    return pos;
+}
+
+// ============================================================================
+// SECTION 3: SIMULATED DIRECTORY STRUCTURE
+// ============================================================================
+// Since native directory APIs are not yet available, we simulate a
+// directory structure for demonstration purposes.
+
+// Directory entry structure:
+//   - type (8 bytes): 0=end, 1=file, 2=directory
+//   - name_len (8 bytes): length of name
+//   - name (variable): null-terminated string
+
+fn ENTRY_TYPE() { return 0; }
+fn ENTRY_NAME_LEN() { return 8; }
+fn ENTRY_NAME() { return 16; }
+fn ENTRY_SIZE() { return 80; }  // Max entry size
+
+fn TYPE_END() { return 0; }
+fn TYPE_FILE() { return 1; }
+fn TYPE_DIR() { return 2; }
+
+// Build a directory entry
+fn build_entry(entries, entry_idx, entry_type, name_buf, name_off) {
+    let base = entry_idx * ENTRY_SIZE();
+
+    // Set type
+    mem_write_i64(entries, base + ENTRY_TYPE(), entry_type);
+
+    // Copy name
+    let len = str_copy(entries, base + ENTRY_NAME(), name_buf, name_off);
+    mem_write_i64(entries, base + ENTRY_NAME_LEN(), len);
+
+    return 0;
+}
+
+// Build simulated directory structure
+fn build_test_structure(entries, temp) {
+    let idx = 0;
+
+    // src/ directory
+    poke(temp, 0, 115); poke(temp, 1, 114); poke(temp, 2, 99); poke(temp, 3, 0);  // "src"
+    build_entry(entries, idx, TYPE_DIR(), temp, 0);
+    idx = idx + 1;
+
+    // main.xers file
+    poke(temp, 0, 109); poke(temp, 1, 97); poke(temp, 2, 105); poke(temp, 3, 110);
+    poke(temp, 4, 46); poke(temp, 5, 120); poke(temp, 6, 101); poke(temp, 7, 114);
+    poke(temp, 8, 115); poke(temp, 9, 0);  // "main.xers"
+    build_entry(entries, idx, TYPE_FILE(), temp, 0);
+    idx = idx + 1;
+
+    // utils.xers file
+    poke(temp, 0, 117); poke(temp, 1, 116); poke(temp, 2, 105); poke(temp, 3, 108);
+    poke(temp, 4, 115); poke(temp, 5, 46); poke(temp, 6, 120); poke(temp, 7, 101);
+    poke(temp, 8, 114); poke(temp, 9, 115); poke(temp, 10, 0);  // "utils.xers"
+    build_entry(entries, idx, TYPE_FILE(), temp, 0);
+    idx = idx + 1;
+
+    // lib/ directory
+    poke(temp, 0, 108); poke(temp, 1, 105); poke(temp, 2, 98); poke(temp, 3, 0);  // "lib"
+    build_entry(entries, idx, TYPE_DIR(), temp, 0);
+    idx = idx + 1;
+
+    // config.txt file
+    poke(temp, 0, 99); poke(temp, 1, 111); poke(temp, 2, 110); poke(temp, 3, 102);
+    poke(temp, 4, 105); poke(temp, 5, 103); poke(temp, 6, 46); poke(temp, 7, 116);
+    poke(temp, 8, 120); poke(temp, 9, 116); poke(temp, 10, 0);  // "config.txt"
+    build_entry(entries, idx, TYPE_FILE(), temp, 0);
+    idx = idx + 1;
+
+    // parser.xers file
+    poke(temp, 0, 112); poke(temp, 1, 97); poke(temp, 2, 114); poke(temp, 3, 115);
+    poke(temp, 4, 101); poke(temp, 5, 114); poke(temp, 6, 46); poke(temp, 7, 120);
+    poke(temp, 8, 101); poke(temp, 9, 114); poke(temp, 10, 115); poke(temp, 11, 0);  // "parser.xers"
+    build_entry(entries, idx, TYPE_FILE(), temp, 0);
+    idx = idx + 1;
+
+    // lexer.xers file
+    poke(temp, 0, 108); poke(temp, 1, 101); poke(temp, 2, 120); poke(temp, 3, 101);
+    poke(temp, 4, 114); poke(temp, 5, 46); poke(temp, 6, 120); poke(temp, 7, 101);
+    poke(temp, 8, 114); poke(temp, 9, 115); poke(temp, 10, 0);  // "lexer.xers"
+    build_entry(entries, idx, TYPE_FILE(), temp, 0);
+    idx = idx + 1;
+
+    // readme.md file
+    poke(temp, 0, 114); poke(temp, 1, 101); poke(temp, 2, 97); poke(temp, 3, 100);
+    poke(temp, 4, 109); poke(temp, 5, 101); poke(temp, 6, 46); poke(temp, 7, 109);
+    poke(temp, 8, 100); poke(temp, 9, 0);  // "readme.md"
+    build_entry(entries, idx, TYPE_FILE(), temp, 0);
+    idx = idx + 1;
+
+    // End marker
+    build_entry(entries, idx, TYPE_END(), temp, 0);
+
+    return idx;
+}
+
+// ============================================================================
+// SECTION 4: DIRECTORY TRAVERSAL API (SIMULATED)
+// ============================================================================
+
+// Simulated list_dir: returns handle (just uses entries directly)
+fn list_dir(entries, path_buf, path_off) {
+    // In real implementation, this would:
+    // 1. Open directory at path
+    // 2. Return handle for iteration
+    // For simulation, we just return the entries pointer
+    return entries;
+}
+
+// Simulated dir_next: get next entry, returns 0 if done
+fn dir_next(handle, index_ptr) {
+    let idx = mem_read_i64(index_ptr, 0);
+    let base = idx * ENTRY_SIZE();
+    let entry_type = mem_read_i64(handle, base + ENTRY_TYPE());
+
+    if entry_type == TYPE_END() {
+        return 0;  // No more entries
+    }
+
+    // Increment index for next call
+    mem_write_i64(index_ptr, 0, idx + 1);
+    return base;  // Return offset to current entry
+}
+
+// Simulated dir_close: cleanup (no-op in simulation)
+fn dir_close(handle) {
+    return 0;
+}
+
+// Check if entry is a directory
+fn is_dir(handle, entry_off) {
+    let entry_type = mem_read_i64(handle, entry_off + ENTRY_TYPE());
+    return entry_type == TYPE_DIR();
+}
+
+// Check if entry is a file
+fn is_file(handle, entry_off) {
+    let entry_type = mem_read_i64(handle, entry_off + ENTRY_TYPE());
+    return entry_type == TYPE_FILE();
+}
+
+// Get entry name
+fn get_entry_name(handle, entry_off, dest, dest_off) {
+    return str_copy(dest, dest_off, handle, entry_off + ENTRY_NAME());
+}
+
+// ============================================================================
+// SECTION 5: OUTPUT UTILITIES
+// ============================================================================
+
+fn print_indent(depth) {
+    let i = 0;
+    while i < depth {
+        // Print "  " (two spaces per level)
+        print_int(32);
+        print_int(32);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn print_str_direct(buf, off) {
+    let c = peek(buf, off);
+    while c != 0 {
+        print_int(c);
+        off = off + 1;
+        c = peek(buf, off);
+    }
+    return 0;
+}
+
+fn print_newline() {
+    print_int(10);
+    return 0;
+}
+
+fn print_label(label_type) {
+    // label_type: 0 = "[DIR]", 1 = "[FILE]", 2 = "[XERS]"
+    print_int(91);  // [
+    if label_type == 0 {
+        print_int(68); print_int(73); print_int(82);  // DIR
+    }
+    if label_type == 1 {
+        print_int(70); print_int(73); print_int(76); print_int(69);  // FILE
+    }
+    if label_type == 2 {
+        print_int(88); print_int(69); print_int(82); print_int(83);  // XERS
+    }
+    print_int(93);  // ]
+    print_int(32);  // space
+    return 0;
+}
+
+// ============================================================================
+// SECTION 6: DIRECTORY WALKER
+// ============================================================================
+
+// Walk directory and count .xers files
+fn walk_directory(entries, depth, xers_count_ptr, path_buf, name_buf, suffix_buf) {
+    let index_holder = alloc(16);
+    mem_write_i64(index_holder, 0, 0);  // Start at index 0
+
+    let handle = list_dir(entries, path_buf, 0);
+
+    let entry_off = dir_next(handle, index_holder);
+    while entry_off != 0 {
+        // Get entry name
+        get_entry_name(handle, entry_off, name_buf, 0);
+
+        if is_dir(handle, entry_off) == 1 {
+            // It's a directory
+            print_indent(depth);
+            print_label(0);  // [DIR]
+            print_str_direct(name_buf, 0);
+            print_newline();
+
+            // Note: In a real implementation, we would recursively walk
+            // For simulation, we just show the structure
+        }
+
+        if is_file(handle, entry_off) == 1 {
+            // It's a file - check if it's a .xers file
+            // suffix_buf contains ".xers" (46, 120, 101, 114, 115, 0)
+            let is_xers = str_ends_with(name_buf, 0, suffix_buf, 0);
+
+            print_indent(depth);
+            if is_xers == 1 {
+                print_label(2);  // [XERS]
+                // Increment counter
+                let count = mem_read_i64(xers_count_ptr, 0);
+                mem_write_i64(xers_count_ptr, 0, count + 1);
+            } else {
+                print_label(1);  // [FILE]
+            }
+            print_str_direct(name_buf, 0);
+            print_newline();
+        }
+
+        entry_off = dir_next(handle, index_holder);
+    }
+
+    dir_close(handle);
+    return 0;
+}
+
+// ============================================================================
+// SECTION 7: MAIN ENTRY POINT
+// ============================================================================
+
+fn print_header() {
+    // Print "=== Directory Walker Demo ==="
+    print_int(61); print_int(61); print_int(61);  // ===
+    print_int(32);  // space
+    print_int(68); print_int(105); print_int(114); print_int(101);  // Dire
+    print_int(99); print_int(116); print_int(111); print_int(114);  // ctor
+    print_int(121);  // y
+    print_int(32);  // space
+    print_int(87); print_int(97); print_int(108); print_int(107);  // Walk
+    print_int(101); print_int(114);  // er
+    print_int(32);  // space
+    print_int(68); print_int(101); print_int(109); print_int(111);  // Demo
+    print_int(32);  // space
+    print_int(61); print_int(61); print_int(61);  // ===
+    print_newline();
+    print_newline();
+    return 0;
+}
+
+fn print_results(xers_count) {
+    print_newline();
+    // Print "Found "
+    print_int(70); print_int(111); print_int(117); print_int(110); print_int(100);
+    print_int(32);  // space
+    print_int(xers_count + 48);  // count as digit
+    // Print " .xers files"
+    print_int(32);
+    print_int(46); print_int(120); print_int(101); print_int(114); print_int(115);  // .xers
+    print_int(32);
+    print_int(102); print_int(105); print_int(108); print_int(101); print_int(115);  // files
+    print_newline();
+    return 0;
+}
+
+fn main() {
+    // Allocate memory
+    let entries = alloc(4096);    // Simulated directory entries
+    let temp = alloc(256);        // Temporary buffer
+    let path_buf = alloc(512);    // Path buffer
+    let name_buf = alloc(128);    // Name buffer
+    let suffix_buf = alloc(16);   // Suffix buffer for ".xers"
+    let xers_count = alloc(16);   // Counter for .xers files
+
+    // Initialize .xers suffix
+    poke(suffix_buf, 0, 46);   // .
+    poke(suffix_buf, 1, 120);  // x
+    poke(suffix_buf, 2, 101);  // e
+    poke(suffix_buf, 3, 114);  // r
+    poke(suffix_buf, 4, 115);  // s
+    poke(suffix_buf, 5, 0);    // null terminator
+
+    // Initialize counter
+    mem_write_i64(xers_count, 0, 0);
+
+    // Build simulated directory structure
+    build_test_structure(entries, temp);
+
+    // Print header
+    print_header();
+
+    // Walk directory
+    walk_directory(entries, 0, xers_count, path_buf, name_buf, suffix_buf);
+
+    // Print results
+    let count = mem_read_i64(xers_count, 0);
+    print_results(count);
+
+    return 0;
+}

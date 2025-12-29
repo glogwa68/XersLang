@@ -1,0 +1,827 @@
+// ============================================================================
+// String Utilities - Comprehensive String Operations Library
+// ============================================================================
+// XersLang example demonstrating a complete string manipulation library.
+// Provides reusable functions for common string operations.
+//
+// Functions provided:
+// - str_len: Get string length
+// - str_copy: Copy string to destination
+// - str_equal: Compare two strings for equality
+// - str_starts_with: Check if string starts with prefix
+// - str_ends_with: Check if string ends with suffix
+// - str_concat: Concatenate two strings
+// - str_find: Find substring in string
+// - str_upper: Convert to uppercase
+// - str_lower: Convert to lowercase
+// - str_trim: Remove leading/trailing whitespace
+// - path_join: Join path components
+// - path_basename: Get filename from path
+// - path_dirname: Get directory from path
+// - path_extension: Get file extension
+// ============================================================================
+
+// ============================================================================
+// SECTION 1: MEMORY UTILITIES
+// ============================================================================
+
+fn mem_write_i64(buf, off, val) {
+    poke(buf, off, val);
+    poke(buf, off + 1, val / 256);
+    poke(buf, off + 2, val / 65536);
+    poke(buf, off + 3, val / 16777216);
+    poke(buf, off + 4, val / 4294967296);
+    poke(buf, off + 5, val / 1099511627776);
+    poke(buf, off + 6, val / 281474976710656);
+    poke(buf, off + 7, val / 72057594037927936);
+    return 0;
+}
+
+fn mem_read_i64(buf, off) {
+    let b0 = peek(buf, off);
+    let b1 = peek(buf, off + 1);
+    let b2 = peek(buf, off + 2);
+    let b3 = peek(buf, off + 3);
+    let b4 = peek(buf, off + 4);
+    let b5 = peek(buf, off + 5);
+    let b6 = peek(buf, off + 6);
+    let b7 = peek(buf, off + 7);
+    return b0 + b1*256 + b2*65536 + b3*16777216 + b4*4294967296 + b5*1099511627776 + b6*281474976710656 + b7*72057594037927936;
+}
+
+// ============================================================================
+// SECTION 2: BASIC STRING OPERATIONS
+// ============================================================================
+
+// Calculate length of null-terminated string
+fn str_len(buf, off) {
+    let len = 0;
+    while peek(buf, off + len) != 0 {
+        len = len + 1;
+    }
+    return len;
+}
+
+// Copy string from src to dst, returns length copied
+fn str_copy(dst, dst_off, src, src_off) {
+    let i = 0;
+    let c = peek(src, src_off);
+    while c != 0 {
+        poke(dst, dst_off + i, c);
+        i = i + 1;
+        c = peek(src, src_off + i);
+    }
+    poke(dst, dst_off + i, 0);
+    return i;
+}
+
+// Copy at most max_len characters
+fn str_copy_n(dst, dst_off, src, src_off, max_len) {
+    let i = 0;
+    let c = peek(src, src_off);
+    while c != 0 {
+        if i >= max_len {
+            poke(dst, dst_off + i, 0);
+            return i;
+        }
+        poke(dst, dst_off + i, c);
+        i = i + 1;
+        c = peek(src, src_off + i);
+    }
+    poke(dst, dst_off + i, 0);
+    return i;
+}
+
+// Check if two strings are equal
+// Returns 1 if equal, 0 if not
+fn str_equal(buf1, off1, buf2, off2) {
+    let i = 0;
+    let c1 = peek(buf1, off1);
+    let c2 = peek(buf2, off2);
+
+    while c1 != 0 {
+        if c1 != c2 {
+            return 0;
+        }
+        i = i + 1;
+        c1 = peek(buf1, off1 + i);
+        c2 = peek(buf2, off2 + i);
+    }
+
+    if c2 != 0 {
+        return 0;
+    }
+    return 1;
+}
+
+// Compare strings (like strcmp)
+// Returns: -1 if s1 < s2, 0 if equal, 1 if s1 > s2
+fn str_compare(buf1, off1, buf2, off2) {
+    let i = 0;
+    let c1 = peek(buf1, off1);
+    let c2 = peek(buf2, off2);
+
+    while c1 != 0 {
+        if c1 < c2 { return 0 - 1; }
+        if c1 > c2 { return 1; }
+        i = i + 1;
+        c1 = peek(buf1, off1 + i);
+        c2 = peek(buf2, off2 + i);
+    }
+
+    if c2 != 0 { return 0 - 1; }
+    return 0;
+}
+
+// ============================================================================
+// SECTION 3: STRING PREFIX/SUFFIX OPERATIONS
+// ============================================================================
+
+// Check if string starts with given prefix
+// Returns 1 if true, 0 if false
+fn str_starts_with(buf, str_off, prefix_buf, prefix_off) {
+    let i = 0;
+    let c1 = peek(prefix_buf, prefix_off);
+
+    while c1 != 0 {
+        let c2 = peek(buf, str_off + i);
+        if c1 != c2 {
+            return 0;
+        }
+        i = i + 1;
+        c1 = peek(prefix_buf, prefix_off + i);
+    }
+    return 1;
+}
+
+// Check if string ends with given suffix
+// Returns 1 if true, 0 if false
+fn str_ends_with(buf, str_off, suffix_buf, suffix_off) {
+    let str_len_val = str_len(buf, str_off);
+    let suffix_len = str_len(suffix_buf, suffix_off);
+
+    if suffix_len > str_len_val {
+        return 0;
+    }
+
+    let start = str_len_val - suffix_len;
+    let i = 0;
+    while i < suffix_len {
+        let c1 = peek(buf, str_off + start + i);
+        let c2 = peek(suffix_buf, suffix_off + i);
+        if c1 != c2 {
+            return 0;
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
+// ============================================================================
+// SECTION 4: STRING CONCATENATION
+// ============================================================================
+
+// Concatenate two strings into destination
+// Returns total length
+fn str_concat(dst, dst_off, s1, s1_off, s2, s2_off) {
+    let pos = 0;
+
+    // Copy first string
+    let c = peek(s1, s1_off);
+    while c != 0 {
+        poke(dst, dst_off + pos, c);
+        pos = pos + 1;
+        s1_off = s1_off + 1;
+        c = peek(s1, s1_off);
+    }
+
+    // Copy second string
+    c = peek(s2, s2_off);
+    while c != 0 {
+        poke(dst, dst_off + pos, c);
+        pos = pos + 1;
+        s2_off = s2_off + 1;
+        c = peek(s2, s2_off);
+    }
+
+    poke(dst, dst_off + pos, 0);
+    return pos;
+}
+
+// Append string to existing string in buffer
+// Returns new total length
+fn str_append(buf, buf_off, src, src_off) {
+    let len = str_len(buf, buf_off);
+    let pos = buf_off + len;
+
+    let c = peek(src, src_off);
+    while c != 0 {
+        poke(buf, pos, c);
+        pos = pos + 1;
+        len = len + 1;
+        src_off = src_off + 1;
+        c = peek(src, src_off);
+    }
+
+    poke(buf, pos, 0);
+    return len;
+}
+
+// ============================================================================
+// SECTION 5: STRING SEARCH OPERATIONS
+// ============================================================================
+
+// Find character in string
+// Returns position of first occurrence, or -1 if not found
+fn str_find_char(buf, str_off, char_val) {
+    let i = 0;
+    let c = peek(buf, str_off);
+
+    while c != 0 {
+        if c == char_val {
+            return i;
+        }
+        i = i + 1;
+        c = peek(buf, str_off + i);
+    }
+    return 0 - 1;
+}
+
+// Find last occurrence of character in string
+// Returns position, or -1 if not found
+fn str_find_char_last(buf, str_off, char_val) {
+    let len = str_len(buf, str_off);
+    let i = len - 1;
+
+    while i >= 0 {
+        let c = peek(buf, str_off + i);
+        if c == char_val {
+            return i;
+        }
+        i = i - 1;
+    }
+    return 0 - 1;
+}
+
+// Find substring in string
+// Returns starting position, or -1 if not found
+fn str_find(buf, str_off, needle_buf, needle_off) {
+    let str_len_val = str_len(buf, str_off);
+    let needle_len = str_len(needle_buf, needle_off);
+
+    if needle_len > str_len_val {
+        return 0 - 1;
+    }
+
+    let max_pos = str_len_val - needle_len;
+    let i = 0;
+
+    while i <= max_pos {
+        let match = 1;
+        let j = 0;
+        while j < needle_len {
+            let c1 = peek(buf, str_off + i + j);
+            let c2 = peek(needle_buf, needle_off + j);
+            if c1 != c2 {
+                match = 0;
+                j = needle_len;  // Break inner loop
+            }
+            j = j + 1;
+        }
+        if match == 1 {
+            return i;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+// ============================================================================
+// SECTION 6: CASE CONVERSION
+// ============================================================================
+
+// Check if character is lowercase letter
+fn is_lower(c) {
+    if c >= 97 {
+        if c <= 122 {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Check if character is uppercase letter
+fn is_upper(c) {
+    if c >= 65 {
+        if c <= 90 {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Convert character to uppercase
+fn char_upper(c) {
+    if is_lower(c) == 1 {
+        return c - 32;
+    }
+    return c;
+}
+
+// Convert character to lowercase
+fn char_lower(c) {
+    if is_upper(c) == 1 {
+        return c + 32;
+    }
+    return c;
+}
+
+// Convert string to uppercase (in-place)
+fn str_upper(buf, off) {
+    let i = 0;
+    let c = peek(buf, off);
+
+    while c != 0 {
+        poke(buf, off + i, char_upper(c));
+        i = i + 1;
+        c = peek(buf, off + i);
+    }
+    return i;
+}
+
+// Convert string to lowercase (in-place)
+fn str_lower(buf, off) {
+    let i = 0;
+    let c = peek(buf, off);
+
+    while c != 0 {
+        poke(buf, off + i, char_lower(c));
+        i = i + 1;
+        c = peek(buf, off + i);
+    }
+    return i;
+}
+
+// ============================================================================
+// SECTION 7: WHITESPACE OPERATIONS
+// ============================================================================
+
+// Check if character is whitespace
+fn is_whitespace(c) {
+    if c == 32 { return 1; }   // space
+    if c == 9 { return 1; }    // tab
+    if c == 10 { return 1; }   // newline
+    if c == 13 { return 1; }   // carriage return
+    return 0;
+}
+
+// Trim leading whitespace (copy to destination)
+fn str_trim_left(dst, dst_off, src, src_off) {
+    // Skip leading whitespace
+    let c = peek(src, src_off);
+    while c != 0 {
+        if is_whitespace(c) == 0 {
+            // Found non-whitespace, copy rest
+            return str_copy(dst, dst_off, src, src_off);
+        }
+        src_off = src_off + 1;
+        c = peek(src, src_off);
+    }
+    // All whitespace
+    poke(dst, dst_off, 0);
+    return 0;
+}
+
+// Trim trailing whitespace (modifies in place)
+fn str_trim_right(buf, off) {
+    let len = str_len(buf, off);
+    if len == 0 { return 0; }
+
+    let i = len - 1;
+    while i >= 0 {
+        let c = peek(buf, off + i);
+        if is_whitespace(c) == 0 {
+            poke(buf, off + i + 1, 0);
+            return i + 1;
+        }
+        i = i - 1;
+    }
+    // All whitespace
+    poke(buf, off, 0);
+    return 0;
+}
+
+// Trim both ends (copy to destination)
+fn str_trim(dst, dst_off, src, src_off) {
+    // First copy with left trim
+    let len = str_trim_left(dst, dst_off, src, src_off);
+    // Then trim right
+    return str_trim_right(dst, dst_off);
+}
+
+// ============================================================================
+// SECTION 8: PATH OPERATIONS
+// ============================================================================
+
+// Path separator constants
+fn PATH_SEP_WIN() { return 92; }   // backslash
+fn PATH_SEP_UNIX() { return 47; }  // forward slash
+
+// Check if character is path separator
+fn is_path_sep(c) {
+    if c == 92 { return 1; }   // backslash
+    if c == 47 { return 1; }   // forward slash
+    return 0;
+}
+
+// Join two path components
+fn path_join(dst, dst_off, path1, p1_off, path2, p2_off) {
+    let pos = 0;
+
+    // Copy first path
+    let c = peek(path1, p1_off);
+    while c != 0 {
+        poke(dst, dst_off + pos, c);
+        pos = pos + 1;
+        p1_off = p1_off + 1;
+        c = peek(path1, p1_off);
+    }
+
+    // Add separator if needed
+    if pos > 0 {
+        let last = peek(dst, dst_off + pos - 1);
+        if is_path_sep(last) == 0 {
+            poke(dst, dst_off + pos, PATH_SEP_WIN());
+            pos = pos + 1;
+        }
+    }
+
+    // Skip leading separator in second path
+    c = peek(path2, p2_off);
+    if is_path_sep(c) == 1 {
+        p2_off = p2_off + 1;
+        c = peek(path2, p2_off);
+    }
+
+    // Copy second path
+    while c != 0 {
+        poke(dst, dst_off + pos, c);
+        pos = pos + 1;
+        p2_off = p2_off + 1;
+        c = peek(path2, p2_off);
+    }
+
+    poke(dst, dst_off + pos, 0);
+    return pos;
+}
+
+// Get filename from path (basename)
+fn path_basename(dst, dst_off, path, path_off) {
+    let len = str_len(path, path_off);
+    if len == 0 {
+        poke(dst, dst_off, 0);
+        return 0;
+    }
+
+    // Find last separator
+    let last_sep = 0 - 1;
+    let i = 0;
+    while i < len {
+        let c = peek(path, path_off + i);
+        if is_path_sep(c) == 1 {
+            last_sep = i;
+        }
+        i = i + 1;
+    }
+
+    // Copy from after last separator
+    let start = last_sep + 1;
+    return str_copy(dst, dst_off, path, path_off + start);
+}
+
+// Get directory from path (dirname)
+fn path_dirname(dst, dst_off, path, path_off) {
+    let len = str_len(path, path_off);
+    if len == 0 {
+        poke(dst, dst_off, 46);  // "."
+        poke(dst, dst_off + 1, 0);
+        return 1;
+    }
+
+    // Find last separator
+    let last_sep = 0 - 1;
+    let i = 0;
+    while i < len {
+        let c = peek(path, path_off + i);
+        if is_path_sep(c) == 1 {
+            last_sep = i;
+        }
+        i = i + 1;
+    }
+
+    if last_sep < 0 {
+        // No separator found, return "."
+        poke(dst, dst_off, 46);
+        poke(dst, dst_off + 1, 0);
+        return 1;
+    }
+
+    // Copy up to (but not including) last separator
+    return str_copy_n(dst, dst_off, path, path_off, last_sep);
+}
+
+// Get file extension (including dot)
+fn path_extension(dst, dst_off, path, path_off) {
+    let len = str_len(path, path_off);
+
+    // Find last dot after last separator
+    let last_dot = 0 - 1;
+    let last_sep = 0 - 1;
+    let i = 0;
+
+    while i < len {
+        let c = peek(path, path_off + i);
+        if is_path_sep(c) == 1 {
+            last_sep = i;
+        }
+        if c == 46 {  // dot
+            last_dot = i;
+        }
+        i = i + 1;
+    }
+
+    // Extension must be after last separator
+    if last_dot > last_sep {
+        return str_copy(dst, dst_off, path, path_off + last_dot);
+    }
+
+    // No extension
+    poke(dst, dst_off, 0);
+    return 0;
+}
+
+// ============================================================================
+// SECTION 9: OUTPUT UTILITIES
+// ============================================================================
+
+fn print_newline() {
+    print_int(10);
+    return 0;
+}
+
+fn print_str_direct(buf, off) {
+    let c = peek(buf, off);
+    while c != 0 {
+        print_int(c);
+        off = off + 1;
+        c = peek(buf, off);
+    }
+    return 0;
+}
+
+fn print_label(buf, off) {
+    print_str_direct(buf, off);
+    print_int(58);  // ':'
+    print_int(32);  // ' '
+    return 0;
+}
+
+fn print_result(label_buf, label_off, result_buf, result_off) {
+    print_int(32); print_int(32);  // "  "
+    print_label(label_buf, label_off);
+    print_int(34);  // '"'
+    print_str_direct(result_buf, result_off);
+    print_int(34);  // '"'
+    print_newline();
+    return 0;
+}
+
+fn print_bool_result(label_buf, label_off, value) {
+    print_int(32); print_int(32);  // "  "
+    print_label(label_buf, label_off);
+    if value == 1 {
+        // Print "true"
+        print_int(116); print_int(114); print_int(117); print_int(101);
+    } else {
+        // Print "false"
+        print_int(102); print_int(97); print_int(108); print_int(115); print_int(101);
+    }
+    print_newline();
+    return 0;
+}
+
+fn print_int_result(label_buf, label_off, value) {
+    print_int(32); print_int(32);  // "  "
+    print_label(label_buf, label_off);
+    print_int(value + 48);  // value as digit (simple, works for 0-9)
+    print_newline();
+    return 0;
+}
+
+// ============================================================================
+// SECTION 10: TEST FUNCTIONS
+// ============================================================================
+
+fn build_string(buf, off, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12) {
+    let i = 0;
+    if c1 != 0 { poke(buf, off + i, c1); i = i + 1; }
+    if c2 != 0 { poke(buf, off + i, c2); i = i + 1; }
+    if c3 != 0 { poke(buf, off + i, c3); i = i + 1; }
+    if c4 != 0 { poke(buf, off + i, c4); i = i + 1; }
+    if c5 != 0 { poke(buf, off + i, c5); i = i + 1; }
+    if c6 != 0 { poke(buf, off + i, c6); i = i + 1; }
+    if c7 != 0 { poke(buf, off + i, c7); i = i + 1; }
+    if c8 != 0 { poke(buf, off + i, c8); i = i + 1; }
+    if c9 != 0 { poke(buf, off + i, c9); i = i + 1; }
+    if c10 != 0 { poke(buf, off + i, c10); i = i + 1; }
+    if c11 != 0 { poke(buf, off + i, c11); i = i + 1; }
+    if c12 != 0 { poke(buf, off + i, c12); i = i + 1; }
+    poke(buf, off + i, 0);
+    return i;
+}
+
+fn print_section(name_buf, name_off) {
+    print_newline();
+    print_int(61); print_int(61); print_int(61);  // "==="
+    print_int(32);  // " "
+    print_str_direct(name_buf, name_off);
+    print_int(32);  // " "
+    print_int(61); print_int(61); print_int(61);  // "==="
+    print_newline();
+    return 0;
+}
+
+fn test_basic_ops(s1, s2, result, label) {
+    // Build test strings
+    // s1 = "Hello"
+    build_string(s1, 0, 72, 101, 108, 108, 111, 0, 0, 0, 0, 0, 0, 0);
+    // s2 = "World"
+    build_string(s2, 0, 87, 111, 114, 108, 100, 0, 0, 0, 0, 0, 0, 0);
+
+    // Section label: "Basic Operations"
+    build_string(label, 0, 66, 97, 115, 105, 99, 32, 79, 112, 115, 0, 0, 0);
+    print_section(label, 0);
+
+    // Test str_len
+    build_string(label, 0, 115, 116, 114, 95, 108, 101, 110, 0, 0, 0, 0, 0);  // "str_len"
+    let len = str_len(s1, 0);
+    print_int_result(label, 0, len);
+
+    // Test str_copy
+    build_string(label, 0, 115, 116, 114, 95, 99, 111, 112, 121, 0, 0, 0, 0);  // "str_copy"
+    str_copy(result, 0, s1, 0);
+    print_result(label, 0, result, 0);
+
+    // Test str_concat
+    build_string(label, 0, 115, 116, 114, 95, 99, 111, 110, 99, 97, 116, 0, 0);  // "str_concat"
+    str_concat(result, 0, s1, 0, s2, 0);
+    print_result(label, 0, result, 0);
+
+    return 0;
+}
+
+fn test_prefix_suffix(s1, prefix, suffix, result, label) {
+    // s1 = "hello.xers"
+    build_string(s1, 0, 104, 101, 108, 108, 111, 46, 120, 101, 114, 115, 0, 0);
+    // prefix = "hello"
+    build_string(prefix, 0, 104, 101, 108, 108, 111, 0, 0, 0, 0, 0, 0, 0);
+    // suffix = ".xers"
+    build_string(suffix, 0, 46, 120, 101, 114, 115, 0, 0, 0, 0, 0, 0, 0);
+
+    // Section label
+    build_string(label, 0, 80, 114, 101, 102, 105, 120, 47, 83, 117, 102, 0, 0);  // "Prefix/Suf"
+    print_section(label, 0);
+
+    // Test str_starts_with
+    build_string(label, 0, 115, 116, 97, 114, 116, 115, 95, 119, 105, 116, 104, 0);  // "starts_with"
+    let starts = str_starts_with(s1, 0, prefix, 0);
+    print_bool_result(label, 0, starts);
+
+    // Test str_ends_with
+    build_string(label, 0, 101, 110, 100, 115, 95, 119, 105, 116, 104, 0, 0, 0);  // "ends_with"
+    let ends = str_ends_with(s1, 0, suffix, 0);
+    print_bool_result(label, 0, ends);
+
+    return 0;
+}
+
+fn test_case_ops(s1, result, label) {
+    // s1 = "HeLLo"
+    build_string(s1, 0, 72, 101, 76, 76, 111, 0, 0, 0, 0, 0, 0, 0);
+
+    // Section label
+    build_string(label, 0, 67, 97, 115, 101, 32, 79, 112, 115, 0, 0, 0, 0);  // "Case Ops"
+    print_section(label, 0);
+
+    // Test str_upper
+    str_copy(result, 0, s1, 0);
+    str_upper(result, 0);
+    build_string(label, 0, 115, 116, 114, 95, 117, 112, 112, 101, 114, 0, 0, 0);  // "str_upper"
+    print_result(label, 0, result, 0);
+
+    // Test str_lower
+    str_copy(result, 0, s1, 0);
+    str_lower(result, 0);
+    build_string(label, 0, 115, 116, 114, 95, 108, 111, 119, 101, 114, 0, 0, 0);  // "str_lower"
+    print_result(label, 0, result, 0);
+
+    return 0;
+}
+
+fn test_path_ops(path, result, label) {
+    // path = "src\main.xers" (using backslash = 92)
+    poke(path, 0, 115);   // s
+    poke(path, 1, 114);   // r
+    poke(path, 2, 99);    // c
+    poke(path, 3, 92);    // \
+    poke(path, 4, 109);   // m
+    poke(path, 5, 97);    // a
+    poke(path, 6, 105);   // i
+    poke(path, 7, 110);   // n
+    poke(path, 8, 46);    // .
+    poke(path, 9, 120);   // x
+    poke(path, 10, 101);  // e
+    poke(path, 11, 114);  // r
+    poke(path, 12, 115);  // s
+    poke(path, 13, 0);    // null
+
+    // Section label
+    build_string(label, 0, 80, 97, 116, 104, 32, 79, 112, 115, 0, 0, 0, 0);  // "Path Ops"
+    print_section(label, 0);
+
+    // Show input path
+    build_string(label, 0, 105, 110, 112, 117, 116, 0, 0, 0, 0, 0, 0, 0);  // "input"
+    print_result(label, 0, path, 0);
+
+    // Test path_basename
+    path_basename(result, 0, path, 0);
+    build_string(label, 0, 98, 97, 115, 101, 110, 97, 109, 101, 0, 0, 0, 0);  // "basename"
+    print_result(label, 0, result, 0);
+
+    // Test path_dirname
+    path_dirname(result, 0, path, 0);
+    build_string(label, 0, 100, 105, 114, 110, 97, 109, 101, 0, 0, 0, 0, 0);  // "dirname"
+    print_result(label, 0, result, 0);
+
+    // Test path_extension
+    path_extension(result, 0, path, 0);
+    build_string(label, 0, 101, 120, 116, 101, 110, 115, 105, 111, 110, 0, 0, 0);  // "extension"
+    print_result(label, 0, result, 0);
+
+    // Test path_join
+    // Join "lib" and "utils.xers"
+    let p1 = alloc(32);
+    let p2 = alloc(32);
+    build_string(p1, 0, 108, 105, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0);  // "lib"
+    build_string(p2, 0, 117, 116, 105, 108, 115, 46, 120, 101, 114, 115, 0, 0);  // "utils.xers"
+    path_join(result, 0, p1, 0, p2, 0);
+    build_string(label, 0, 112, 97, 116, 104, 95, 106, 111, 105, 110, 0, 0, 0);  // "path_join"
+    print_result(label, 0, result, 0);
+
+    return 0;
+}
+
+// ============================================================================
+// SECTION 11: MAIN ENTRY POINT
+// ============================================================================
+
+fn print_header() {
+    // Print "=== String Utils Demo ==="
+    print_int(61); print_int(61); print_int(61); print_int(32);  // "=== "
+    print_int(83); print_int(116); print_int(114); print_int(105);  // "Stri"
+    print_int(110); print_int(103); print_int(32);  // "ng "
+    print_int(85); print_int(116); print_int(105); print_int(108);  // "Util"
+    print_int(115); print_int(32);  // "s "
+    print_int(68); print_int(101); print_int(109); print_int(111);  // "Demo"
+    print_int(32); print_int(61); print_int(61); print_int(61);  // " ==="
+    print_newline();
+    return 0;
+}
+
+fn main() {
+    // Allocate buffers
+    let s1 = alloc(256);
+    let s2 = alloc(256);
+    let result = alloc(256);
+    let label = alloc(64);
+
+    // Print header
+    print_header();
+
+    // Run tests
+    test_basic_ops(s1, s2, result, label);
+    test_prefix_suffix(s1, s2, result, result, label);
+    test_case_ops(s1, result, label);
+    test_path_ops(s1, result, label);
+
+    print_newline();
+    // Print "Demo complete!"
+    print_int(68); print_int(101); print_int(109); print_int(111);  // "Demo"
+    print_int(32);  // " "
+    print_int(99); print_int(111); print_int(109); print_int(112);  // "comp"
+    print_int(108); print_int(101); print_int(116); print_int(101);  // "lete"
+    print_int(33);  // "!"
+    print_newline();
+
+    return 0;
+}

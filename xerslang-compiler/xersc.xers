@@ -472,29 +472,38 @@ fn next_tok(st) {
         return 0;
     }
 
-    // Single char tokens
-    if c == 123 { mem_write_i64(st, S_TOK(), T_LBRACE()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
-    if c == 125 { mem_write_i64(st, S_TOK(), T_RBRACE()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
-    if c == 40 { mem_write_i64(st, S_TOK(), T_LPAREN()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
-    if c == 41 { mem_write_i64(st, S_TOK(), T_RPAREN()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
-    if c == 59 { mem_write_i64(st, S_TOK(), T_SEMI()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
-    if c == 44 { mem_write_i64(st, S_TOK(), T_COMMA()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
-    if c == 43 { mem_write_i64(st, S_TOK(), T_PLUS()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
-    if c == 45 { mem_write_i64(st, S_TOK(), T_MINUS()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
-    if c == 42 { mem_write_i64(st, S_TOK(), T_STAR()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
-    if c == 47 { mem_write_i64(st, S_TOK(), T_SLASH()); mem_write_i64(st, S_TPOS(), pos); mem_write_i64(st, S_TLEN(), 1); mem_write_i64(st, S_POS(), pos+1); return 0; }
+    // Single char tokens - map character to token type
+    let tok = 0;
+    if c == 123 { tok = T_LBRACE(); }
+    if c == 125 { tok = T_RBRACE(); }
+    if c == 40 { tok = T_LPAREN(); }
+    if c == 41 { tok = T_RPAREN(); }
+    if c == 59 { tok = T_SEMI(); }
+    if c == 44 { tok = T_COMMA(); }
+    if c == 43 { tok = T_PLUS(); }
+    if c == 45 { tok = T_MINUS(); }
+    if c == 42 { tok = T_STAR(); }
+    if c == 47 { tok = T_SLASH(); }
+    if tok != 0 {
+        mem_write_i64(st, S_TOK(), tok);
+        mem_write_i64(st, S_TPOS(), pos);
+        mem_write_i64(st, S_TLEN(), 1);
+        mem_write_i64(st, S_POS(), pos + 1);
+        return 0;
+    }
 
-    // Two char operators
+    // Two char operators - check for second char if present
+    let c2 = 0;
+    if pos + 1 < len { c2 = peek(src, pos + 1); }
+
+    // == (equals check)
     if c == 61 {
-        if pos + 1 < len {
-            let c2 = peek(src, pos + 1);
-            if c2 == 61 {
-                mem_write_i64(st, S_TOK(), T_EQ());
-                mem_write_i64(st, S_TPOS(), pos);
-                mem_write_i64(st, S_TLEN(), 2);
-                mem_write_i64(st, S_POS(), pos + 2);
-                return 0;
-            }
+        if c2 == 61 {
+            mem_write_i64(st, S_TOK(), T_EQ());
+            mem_write_i64(st, S_TPOS(), pos);
+            mem_write_i64(st, S_TLEN(), 2);
+            mem_write_i64(st, S_POS(), pos + 2);
+            return 0;
         }
         mem_write_i64(st, S_TOK(), T_ASSIGN());
         mem_write_i64(st, S_TPOS(), pos);
@@ -503,29 +512,25 @@ fn next_tok(st) {
         return 0;
     }
 
+    // != (not equals)
     if c == 33 {
-        if pos + 1 < len {
-            let c2 = peek(src, pos + 1);
-            if c2 == 61 {
-                mem_write_i64(st, S_TOK(), T_NE());
-                mem_write_i64(st, S_TPOS(), pos);
-                mem_write_i64(st, S_TLEN(), 2);
-                mem_write_i64(st, S_POS(), pos + 2);
-                return 0;
-            }
+        if c2 == 61 {
+            mem_write_i64(st, S_TOK(), T_NE());
+            mem_write_i64(st, S_TPOS(), pos);
+            mem_write_i64(st, S_TLEN(), 2);
+            mem_write_i64(st, S_POS(), pos + 2);
+            return 0;
         }
     }
 
+    // < or <=
     if c == 60 {
-        if pos + 1 < len {
-            let c2 = peek(src, pos + 1);
-            if c2 == 61 {
-                mem_write_i64(st, S_TOK(), T_LE());
-                mem_write_i64(st, S_TPOS(), pos);
-                mem_write_i64(st, S_TLEN(), 2);
-                mem_write_i64(st, S_POS(), pos + 2);
-                return 0;
-            }
+        if c2 == 61 {
+            mem_write_i64(st, S_TOK(), T_LE());
+            mem_write_i64(st, S_TPOS(), pos);
+            mem_write_i64(st, S_TLEN(), 2);
+            mem_write_i64(st, S_POS(), pos + 2);
+            return 0;
         }
         mem_write_i64(st, S_TOK(), T_LT());
         mem_write_i64(st, S_TPOS(), pos);
@@ -534,29 +539,25 @@ fn next_tok(st) {
         return 0;
     }
 
+    // :: (path separator)
     if c == 58 {
-        if pos + 1 < len {
-            let c2 = peek(src, pos + 1);
-            if c2 == 58 {
-                mem_write_i64(st, S_TOK(), T_COLONCOLON());
-                mem_write_i64(st, S_TPOS(), pos);
-                mem_write_i64(st, S_TLEN(), 2);
-                mem_write_i64(st, S_POS(), pos + 2);
-                return 0;
-            }
+        if c2 == 58 {
+            mem_write_i64(st, S_TOK(), T_COLONCOLON());
+            mem_write_i64(st, S_TPOS(), pos);
+            mem_write_i64(st, S_TLEN(), 2);
+            mem_write_i64(st, S_POS(), pos + 2);
+            return 0;
         }
     }
 
+    // > or >=
     if c == 62 {
-        if pos + 1 < len {
-            let c2 = peek(src, pos + 1);
-            if c2 == 61 {
-                mem_write_i64(st, S_TOK(), T_GE());
-                mem_write_i64(st, S_TPOS(), pos);
-                mem_write_i64(st, S_TLEN(), 2);
-                mem_write_i64(st, S_POS(), pos + 2);
-                return 0;
-            }
+        if c2 == 61 {
+            mem_write_i64(st, S_TOK(), T_GE());
+            mem_write_i64(st, S_TPOS(), pos);
+            mem_write_i64(st, S_TLEN(), 2);
+            mem_write_i64(st, S_POS(), pos + 2);
+            return 0;
         }
         mem_write_i64(st, S_TOK(), T_GT());
         mem_write_i64(st, S_TPOS(), pos);
@@ -759,168 +760,60 @@ fn resolve_relocs(st) {
 // Forward declarations removed - functions defined later in file
 // (The ASM compiler supports forward references for function calls)
 
-// Builtin detection: returns builtin ID (1-8) or 0 if not a builtin
+// Helper: Compare source string at name_pos with expected bytes
+// Returns 1 if match, 0 otherwise
+// c0-c9 are ASCII codes of expected characters (use 0 for unused positions)
+fn match_name(src, name_pos, name_len, expected_len, c0, c1, c2, c3, c4, c5, c6, c7, c8, c9) {
+    if name_len != expected_len { return 0; }
+    if expected_len >= 1 { if peek(src, name_pos) != c0 { return 0; } }
+    if expected_len >= 2 { if peek(src, name_pos + 1) != c1 { return 0; } }
+    if expected_len >= 3 { if peek(src, name_pos + 2) != c2 { return 0; } }
+    if expected_len >= 4 { if peek(src, name_pos + 3) != c3 { return 0; } }
+    if expected_len >= 5 { if peek(src, name_pos + 4) != c4 { return 0; } }
+    if expected_len >= 6 { if peek(src, name_pos + 5) != c5 { return 0; } }
+    if expected_len >= 7 { if peek(src, name_pos + 6) != c6 { return 0; } }
+    if expected_len >= 8 { if peek(src, name_pos + 7) != c7 { return 0; } }
+    if expected_len >= 9 { if peek(src, name_pos + 8) != c8 { return 0; } }
+    if expected_len >= 10 { if peek(src, name_pos + 9) != c9 { return 0; } }
+    return 1;
+}
+
+// Builtin detection: returns builtin ID (1-9) or 0 if not a builtin
+// IDs: 1=peek, 2=poke, 3=strlen, 4=streq, 5=alloc, 6=print_int,
+//      7=read_file, 8=file_len, 9=write_file
 fn is_builtin(st, name_pos, name_len) {
     let src = mem_read_i64(st, S_SRC());
 
-    // peek (4 chars)
-    if name_len == 4 {
-        if peek(src, name_pos) == 112 {
-            if peek(src, name_pos + 1) == 101 {
-                if peek(src, name_pos + 2) == 101 {
-                    if peek(src, name_pos + 3) == 107 {
-                        return 1;
-                    }
-                }
-            }
-        }
-        // poke (4 chars)
-        if peek(src, name_pos) == 112 {
-            if peek(src, name_pos + 1) == 111 {
-                if peek(src, name_pos + 2) == 107 {
-                    if peek(src, name_pos + 3) == 101 {
-                        return 2;
-                    }
-                }
-            }
-        }
-    }
+    // Early exit for impossible lengths
+    if name_len < 4 { return 0; }
+    if name_len > 10 { return 0; }
 
-    // alloc (5 chars)
-    if name_len == 5 {
-        if peek(src, name_pos) == 97 {
-            if peek(src, name_pos + 1) == 108 {
-                if peek(src, name_pos + 2) == 108 {
-                    if peek(src, name_pos + 3) == 111 {
-                        if peek(src, name_pos + 4) == 99 {
-                            return 5;
-                        }
-                    }
-                }
-            }
-        }
-        // streq (5 chars)
-        if peek(src, name_pos) == 115 {
-            if peek(src, name_pos + 1) == 116 {
-                if peek(src, name_pos + 2) == 114 {
-                    if peek(src, name_pos + 3) == 101 {
-                        if peek(src, name_pos + 4) == 113 {
-                            return 4;
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // peek: 112,101,101,107 = "peek" (4 chars)
+    if match_name(src, name_pos, name_len, 4, 112, 101, 101, 107, 0, 0, 0, 0, 0, 0) == 1 { return 1; }
 
-    // strlen (6 chars)
-    if name_len == 6 {
-        if peek(src, name_pos) == 115 {
-            if peek(src, name_pos + 1) == 116 {
-                if peek(src, name_pos + 2) == 114 {
-                    if peek(src, name_pos + 3) == 108 {
-                        if peek(src, name_pos + 4) == 101 {
-                            if peek(src, name_pos + 5) == 110 {
-                                return 3;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // poke: 112,111,107,101 = "poke" (4 chars)
+    if match_name(src, name_pos, name_len, 4, 112, 111, 107, 101, 0, 0, 0, 0, 0, 0) == 1 { return 2; }
 
-    // file_len (8 chars)
-    if name_len == 8 {
-        if peek(src, name_pos) == 102 {
-            if peek(src, name_pos + 1) == 105 {
-                if peek(src, name_pos + 2) == 108 {
-                    if peek(src, name_pos + 3) == 101 {
-                        if peek(src, name_pos + 4) == 95 {
-                            if peek(src, name_pos + 5) == 108 {
-                                if peek(src, name_pos + 6) == 101 {
-                                    if peek(src, name_pos + 7) == 110 {
-                                        return 8;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // alloc: 97,108,108,111,99 = "alloc" (5 chars)
+    if match_name(src, name_pos, name_len, 5, 97, 108, 108, 111, 99, 0, 0, 0, 0, 0) == 1 { return 5; }
 
-    // read_file (9 chars)
-    if name_len == 9 {
-        if peek(src, name_pos) == 114 {
-            if peek(src, name_pos + 1) == 101 {
-                if peek(src, name_pos + 2) == 97 {
-                    if peek(src, name_pos + 3) == 100 {
-                        if peek(src, name_pos + 4) == 95 {
-                            if peek(src, name_pos + 5) == 102 {
-                                if peek(src, name_pos + 6) == 105 {
-                                    if peek(src, name_pos + 7) == 108 {
-                                        if peek(src, name_pos + 8) == 101 {
-                                            return 7;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // streq: 115,116,114,101,113 = "streq" (5 chars)
+    if match_name(src, name_pos, name_len, 5, 115, 116, 114, 101, 113, 0, 0, 0, 0, 0) == 1 { return 4; }
 
-    // print_int (9 chars)
-    if name_len == 9 {
-        if peek(src, name_pos) == 112 {
-            if peek(src, name_pos + 1) == 114 {
-                if peek(src, name_pos + 2) == 105 {
-                    if peek(src, name_pos + 3) == 110 {
-                        if peek(src, name_pos + 4) == 116 {
-                            if peek(src, name_pos + 5) == 95 {
-                                if peek(src, name_pos + 6) == 105 {
-                                    if peek(src, name_pos + 7) == 110 {
-                                        if peek(src, name_pos + 8) == 116 {
-                                            return 6;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // strlen: 115,116,114,108,101,110 = "strlen" (6 chars)
+    if match_name(src, name_pos, name_len, 6, 115, 116, 114, 108, 101, 110, 0, 0, 0, 0) == 1 { return 3; }
 
-    // write_file (10 chars)
-    if name_len == 10 {
-        if peek(src, name_pos) == 119 {
-            if peek(src, name_pos + 1) == 114 {
-                if peek(src, name_pos + 2) == 105 {
-                    if peek(src, name_pos + 3) == 116 {
-                        if peek(src, name_pos + 4) == 101 {
-                            if peek(src, name_pos + 5) == 95 {
-                                if peek(src, name_pos + 6) == 102 {
-                                    if peek(src, name_pos + 7) == 105 {
-                                        if peek(src, name_pos + 8) == 108 {
-                                            if peek(src, name_pos + 9) == 101 {
-                                                return 9;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // file_len: 102,105,108,101,95,108,101,110 = "file_len" (8 chars)
+    if match_name(src, name_pos, name_len, 8, 102, 105, 108, 101, 95, 108, 101, 110, 0, 0) == 1 { return 8; }
+
+    // read_file: 114,101,97,100,95,102,105,108,101 = "read_file" (9 chars)
+    if match_name(src, name_pos, name_len, 9, 114, 101, 97, 100, 95, 102, 105, 108, 101, 0) == 1 { return 7; }
+
+    // print_int: 112,114,105,110,116,95,105,110,116 = "print_int" (9 chars)
+    if match_name(src, name_pos, name_len, 9, 112, 114, 105, 110, 116, 95, 105, 110, 116, 0) == 1 { return 6; }
+
+    // write_file: 119,114,105,116,101,95,102,105,108,101 = "write_file" (10 chars)
+    if match_name(src, name_pos, name_len, 10, 119, 114, 105, 116, 101, 95, 102, 105, 108, 101) == 1 { return 9; }
 
     return 0;
 }
@@ -1335,63 +1228,37 @@ fn parse_add(st) {
     return 0;
 }
 
+// Helper: Emit comparison codegen sequence
+// setcc_opcode: 148=sete, 149=setne, 156=setl, 159=setg, 158=setle, 157=setge
+fn emit_cmp_op(st, setcc_opcode) {
+    emit(st, 89);  // pop rcx
+    emit(st, 72); emit(st, 57); emit(st, 193);  // cmp rcx, rax
+    emit(st, 15); emit(st, setcc_opcode); emit(st, 192);  // setcc al
+    emit(st, 72); emit(st, 15); emit(st, 182); emit(st, 192);  // movzx rax, al
+    return 0;
+}
+
+// Get setcc opcode for comparison token, 0 if not a comparison
+fn get_setcc_opcode(tok) {
+    if tok == T_EQ() { return 148; }   // sete
+    if tok == T_NE() { return 149; }   // setne
+    if tok == T_LT() { return 156; }   // setl
+    if tok == T_GT() { return 159; }   // setg
+    if tok == T_LE() { return 158; }   // setle
+    if tok == T_GE() { return 157; }   // setge
+    return 0;
+}
+
 // Parse comparison
 fn parse_cmp(st) {
     parse_add(st);
     let tok = mem_read_i64(st, S_TOK());
-    if tok == T_EQ() {
+    let setcc = get_setcc_opcode(tok);
+    if setcc != 0 {
         next_tok(st);
         emit(st, 80);  // push rax
         parse_add(st);
-        emit(st, 89);  // pop rcx
-        emit(st, 72); emit(st, 57); emit(st, 193);  // cmp rcx, rax
-        emit(st, 15); emit(st, 148); emit(st, 192);  // sete al
-        emit(st, 72); emit(st, 15); emit(st, 182); emit(st, 192);  // movzx rax, al
-    }
-    if tok == T_NE() {
-        next_tok(st);
-        emit(st, 80);
-        parse_add(st);
-        emit(st, 89);
-        emit(st, 72); emit(st, 57); emit(st, 193);
-        emit(st, 15); emit(st, 149); emit(st, 192);  // setne al
-        emit(st, 72); emit(st, 15); emit(st, 182); emit(st, 192);
-    }
-    if tok == T_LT() {
-        next_tok(st);
-        emit(st, 80);
-        parse_add(st);
-        emit(st, 89);
-        emit(st, 72); emit(st, 57); emit(st, 193);
-        emit(st, 15); emit(st, 156); emit(st, 192);  // setl al
-        emit(st, 72); emit(st, 15); emit(st, 182); emit(st, 192);
-    }
-    if tok == T_GT() {
-        next_tok(st);
-        emit(st, 80);
-        parse_add(st);
-        emit(st, 89);
-        emit(st, 72); emit(st, 57); emit(st, 193);
-        emit(st, 15); emit(st, 159); emit(st, 192);  // setg al
-        emit(st, 72); emit(st, 15); emit(st, 182); emit(st, 192);
-    }
-    if tok == T_LE() {
-        next_tok(st);
-        emit(st, 80);
-        parse_add(st);
-        emit(st, 89);
-        emit(st, 72); emit(st, 57); emit(st, 193);
-        emit(st, 15); emit(st, 158); emit(st, 192);  // setle al
-        emit(st, 72); emit(st, 15); emit(st, 182); emit(st, 192);
-    }
-    if tok == T_GE() {
-        next_tok(st);
-        emit(st, 80);
-        parse_add(st);
-        emit(st, 89);
-        emit(st, 72); emit(st, 57); emit(st, 193);
-        emit(st, 15); emit(st, 157); emit(st, 192);  // setge al
-        emit(st, 72); emit(st, 15); emit(st, 182); emit(st, 192);
+        emit_cmp_op(st, setcc);
     }
     return 0;
 }
@@ -2324,6 +2191,36 @@ fn str_copy(dst, src) {
     return i;
 }
 
+// Helper: Write ".xers" extension at position in buffer, returns new position
+fn write_ext_xers(buf, pos) {
+    poke(buf, pos, 46);      // '.'
+    poke(buf, pos + 1, 120); // 'x'
+    poke(buf, pos + 2, 101); // 'e'
+    poke(buf, pos + 3, 114); // 'r'
+    poke(buf, pos + 4, 115); // 's'
+    poke(buf, pos + 5, 0);
+    return pos + 5;
+}
+
+// Helper: Write ".exe" extension at position in buffer, returns new position
+fn write_ext_exe(buf, pos) {
+    poke(buf, pos, 46);      // '.'
+    poke(buf, pos + 1, 101); // 'e'
+    poke(buf, pos + 2, 120); // 'x'
+    poke(buf, pos + 3, 101); // 'e'
+    poke(buf, pos + 4, 0);
+    return pos + 4;
+}
+
+// Helper: Write "test.xers" string to buffer
+fn write_default_filename(buf) {
+    poke(buf, 0, 116);  // 't'
+    poke(buf, 1, 101);  // 'e'
+    poke(buf, 2, 115);  // 's'
+    poke(buf, 3, 116);  // 't'
+    return write_ext_xers(buf, 4);
+}
+
 // Find position of last dot in string, returns -1 if not found
 fn find_last_dot(str) {
     let len = strlen(str);
@@ -2361,11 +2258,7 @@ fn make_output_filename(outbuf, infile) {
     if dot_pos < 0 {
         // No extension found, just append .exe
         let len = str_copy(outbuf, infile);
-        poke(outbuf, len, 46);      // '.'
-        poke(outbuf, len + 1, 101); // 'e'
-        poke(outbuf, len + 2, 120); // 'x'
-        poke(outbuf, len + 3, 101); // 'e'
-        poke(outbuf, len + 4, 0);
+        write_ext_exe(outbuf, len);
         return 0;
     }
 
@@ -2376,13 +2269,8 @@ fn make_output_filename(outbuf, infile) {
         i = i + 1;
     }
 
-    // Add .exe extension
-    poke(outbuf, i, 46);      // '.'
-    poke(outbuf, i + 1, 101); // 'e'
-    poke(outbuf, i + 2, 120); // 'x'
-    poke(outbuf, i + 3, 101); // 'e'
-    poke(outbuf, i + 4, 0);
-
+    // Add .exe extension using helper
+    write_ext_exe(outbuf, i);
     return 0;
 }
 
@@ -2412,10 +2300,7 @@ fn main() {
 
     if arg == 0 {
         // No argument provided, use default "test.xers"
-        poke(fname, 0, 116); poke(fname, 1, 101); poke(fname, 2, 115);
-        poke(fname, 3, 116); poke(fname, 4, 46); poke(fname, 5, 120);
-        poke(fname, 6, 101); poke(fname, 7, 114); poke(fname, 8, 115);
-        poke(fname, 9, 0);
+        write_default_filename(fname);
     }
     if arg != 0 {
         // Use argument as filename
@@ -2430,12 +2315,11 @@ fn main() {
     // Copy source to src buffer
     let j = 0;
     while j < slen {
-        let ch = peek(sdata, j);
-        poke(src, j, ch);
+        poke(src, j, peek(sdata, j));
         j = j + 1;
     }
 
-    // Init state
+    // Init state - set up all compiler state fields
     mem_write_i64(st, S_POS(), 0);
     mem_write_i64(st, S_LEN(), slen);
     mem_write_i64(st, S_SRC(), src);

@@ -2,43 +2,27 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "XersLang",
   "scopeName": "source.xers",
+  "fileTypes": ["xers", "xer"],
   "patterns": [
-    {
-      "include": "#comments"
-    },
-    {
-      "include": "#keywords"
-    },
-    {
-      "include": "#builtins"
-    },
-    {
-      "include": "#constants"
-    },
-    {
-      "include": "#types"
-    },
-    {
-      "include": "#strings"
-    },
-    {
-      "include": "#numbers"
-    },
-    {
-      "include": "#function-definition"
-    },
-    {
-      "include": "#function-call"
-    },
-    {
-      "include": "#operators"
-    },
-    {
-      "include": "#punctuation"
-    },
-    {
-      "include": "#variables"
-    }
+    { "include": "#comments" },
+    { "include": "#attributes" },
+    { "include": "#strings" },
+    { "include": "#characters" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#builtins" },
+    { "include": "#constants" },
+    { "include": "#types" },
+    { "include": "#function-definition" },
+    { "include": "#struct-definition" },
+    { "include": "#enum-definition" },
+    { "include": "#impl-block" },
+    { "include": "#trait-definition" },
+    { "include": "#module-path" },
+    { "include": "#function-call" },
+    { "include": "#operators" },
+    { "include": "#punctuation" },
+    { "include": "#variables" }
   ],
   "repository": {
     "comments": {
@@ -53,9 +37,32 @@
           "end": "\\*/",
           "patterns": [
             {
-              "name": "comment.block.xers",
-              "match": "."
+              "include": "#comments"
             }
+          ]
+        }
+      ]
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "name": "meta.attribute.xers",
+          "begin": "#\\[",
+          "end": "\\]",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.attribute.begin.xers" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.attribute.end.xers" }
+          },
+          "patterns": [
+            {
+              "name": "entity.other.attribute-name.xers",
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+            },
+            { "include": "#strings" },
+            { "include": "#numbers" },
+            { "include": "#punctuation" }
           ]
         }
       ]
@@ -63,16 +70,68 @@
     "keywords": {
       "patterns": [
         {
-          "name": "keyword.control.xers",
-          "match": "\\b(if|else|while|return|break|continue)\\b"
+          "name": "keyword.control.conditional.xers",
+          "match": "\\b(if|else|match)\\b"
         },
         {
-          "name": "keyword.declaration.xers",
-          "match": "\\b(fn|let|mut|const)\\b"
+          "name": "keyword.control.loop.xers",
+          "match": "\\b(while|for|loop|in)\\b"
         },
         {
-          "name": "keyword.other.xers",
-          "match": "\\b(struct|enum|impl|trait|mod|use|pub|as|type)\\b"
+          "name": "keyword.control.flow.xers",
+          "match": "\\b(return|break|continue)\\b"
+        },
+        {
+          "name": "keyword.control.async.xers",
+          "match": "\\b(async|await)\\b"
+        },
+        {
+          "name": "keyword.declaration.function.xers",
+          "match": "\\b(fn)\\b"
+        },
+        {
+          "name": "keyword.declaration.variable.xers",
+          "match": "\\b(let|const)\\b"
+        },
+        {
+          "name": "keyword.declaration.struct.xers",
+          "match": "\\b(struct)\\b"
+        },
+        {
+          "name": "keyword.declaration.enum.xers",
+          "match": "\\b(enum)\\b"
+        },
+        {
+          "name": "keyword.declaration.trait.xers",
+          "match": "\\b(trait)\\b"
+        },
+        {
+          "name": "keyword.declaration.impl.xers",
+          "match": "\\b(impl)\\b"
+        },
+        {
+          "name": "keyword.declaration.type.xers",
+          "match": "\\b(type)\\b"
+        },
+        {
+          "name": "keyword.other.module.xers",
+          "match": "\\b(mod|use)\\b"
+        },
+        {
+          "name": "keyword.other.visibility.xers",
+          "match": "\\b(pub)\\b"
+        },
+        {
+          "name": "keyword.other.modifier.xers",
+          "match": "\\b(mut|ref|static|extern|unsafe)\\b"
+        },
+        {
+          "name": "keyword.other.where.xers",
+          "match": "\\b(where)\\b"
+        },
+        {
+          "name": "keyword.operator.cast.xers",
+          "match": "\\b(as)\\b"
         }
       ]
     },
@@ -80,15 +139,23 @@
       "patterns": [
         {
           "name": "support.function.builtin.memory.xers",
-          "match": "\\b(alloc|free|peek|poke)\\b"
+          "match": "\\b(alloc|peek|poke|free)\\b"
         },
         {
           "name": "support.function.builtin.string.xers",
-          "match": "\\b(strlen|streq)\\b"
+          "match": "\\b(strlen|streq|str_copy|str_ends_with|path_join)\\b"
         },
         {
           "name": "support.function.builtin.io.xers",
-          "match": "\\b(print|print_int|printc|prints|println|read_file|file_len|write_file)\\b"
+          "match": "\\b(print_int|print_str|read_file|write_file|file_len)\\b"
+        },
+        {
+          "name": "support.function.builtin.cli.xers",
+          "match": "\\b(get_argc|get_arg)\\b"
+        },
+        {
+          "name": "support.function.builtin.dir.xers",
+          "match": "\\b(list_dir|dir_next|dir_close|is_dir|is_file)\\b"
         },
         {
           "name": "support.function.builtin.process.xers",
@@ -115,12 +182,40 @@
     "types": {
       "patterns": [
         {
-          "name": "storage.type.numeric.xers",
-          "match": "\\b(i64|i32|i16|i8|u64|u32|u16|u8|f64|f32)\\b"
+          "name": "storage.type.numeric.signed.xers",
+          "match": "\\b(i8|i16|i32|i64)\\b"
         },
         {
-          "name": "storage.type.primitive.xers",
-          "match": "\\b(bool|char|str|void|ptr)\\b"
+          "name": "storage.type.numeric.unsigned.xers",
+          "match": "\\b(u8|u16|u32|u64)\\b"
+        },
+        {
+          "name": "storage.type.numeric.float.xers",
+          "match": "\\b(f32|f64)\\b"
+        },
+        {
+          "name": "storage.type.boolean.xers",
+          "match": "\\bbool\\b"
+        },
+        {
+          "name": "storage.type.string.xers",
+          "match": "\\bstr\\b"
+        },
+        {
+          "name": "storage.type.char.xers",
+          "match": "\\bchar\\b"
+        },
+        {
+          "name": "storage.type.pointer.xers",
+          "match": "\\bptr\\b"
+        },
+        {
+          "name": "storage.type.void.xers",
+          "match": "\\bvoid\\b"
+        },
+        {
+          "name": "storage.type.self.xers",
+          "match": "\\bSelf\\b"
         }
       ]
     },
@@ -130,21 +225,97 @@
           "name": "string.quoted.double.xers",
           "begin": "\"",
           "end": "\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.xers" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.xers" }
+          },
           "patterns": [
             {
-              "name": "constant.character.escape.xers",
-              "match": "\\\\(n|r|t|\\\\|\"|'|0|x[0-9a-fA-F]{2}|u\\{[0-9a-fA-F]+\\})"
+              "name": "constant.character.escape.newline.xers",
+              "match": "\\\\n"
+            },
+            {
+              "name": "constant.character.escape.carriage-return.xers",
+              "match": "\\\\r"
+            },
+            {
+              "name": "constant.character.escape.tab.xers",
+              "match": "\\\\t"
+            },
+            {
+              "name": "constant.character.escape.backslash.xers",
+              "match": "\\\\\\\\"
+            },
+            {
+              "name": "constant.character.escape.double-quote.xers",
+              "match": "\\\\\""
+            },
+            {
+              "name": "constant.character.escape.null.xers",
+              "match": "\\\\0"
+            },
+            {
+              "name": "constant.character.escape.hex.xers",
+              "match": "\\\\x[0-9a-fA-F]{2}"
+            },
+            {
+              "name": "constant.character.escape.unicode.xers",
+              "match": "\\\\u\\{[0-9a-fA-F]+\\}"
+            },
+            {
+              "name": "invalid.illegal.unknown-escape.xers",
+              "match": "\\\\."
             }
           ]
-        },
+        }
+      ]
+    },
+    "characters": {
+      "patterns": [
         {
           "name": "string.quoted.single.xers",
           "begin": "'",
           "end": "'",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.char.begin.xers" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.char.end.xers" }
+          },
           "patterns": [
             {
-              "name": "constant.character.escape.xers",
-              "match": "\\\\(n|r|t|\\\\|\"|'|0|x[0-9a-fA-F]{2})"
+              "name": "constant.character.escape.newline.xers",
+              "match": "\\\\n"
+            },
+            {
+              "name": "constant.character.escape.carriage-return.xers",
+              "match": "\\\\r"
+            },
+            {
+              "name": "constant.character.escape.tab.xers",
+              "match": "\\\\t"
+            },
+            {
+              "name": "constant.character.escape.backslash.xers",
+              "match": "\\\\\\\\"
+            },
+            {
+              "name": "constant.character.escape.single-quote.xers",
+              "match": "\\\\'"
+            },
+            {
+              "name": "constant.character.escape.null.xers",
+              "match": "\\\\0"
+            },
+            {
+              "name": "constant.character.escape.hex.xers",
+              "match": "\\\\x[0-9a-fA-F]{2}"
+            },
+            {
+              "name": "invalid.illegal.unknown-escape.xers",
+              "match": "\\\\."
             }
           ]
         }
@@ -154,19 +325,23 @@
       "patterns": [
         {
           "name": "constant.numeric.hex.xers",
-          "match": "\\b0x[0-9a-fA-F_]+\\b"
+          "match": "\\b0x[0-9a-fA-F][0-9a-fA-F_]*\\b"
         },
         {
           "name": "constant.numeric.binary.xers",
-          "match": "\\b0b[01_]+\\b"
+          "match": "\\b0b[01][01_]*\\b"
         },
         {
           "name": "constant.numeric.octal.xers",
-          "match": "\\b0o[0-7_]+\\b"
+          "match": "\\b0o[0-7][0-7_]*\\b"
+        },
+        {
+          "name": "constant.numeric.float.exponent.xers",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*[eE][+-]?[0-9][0-9_]*\\b"
         },
         {
           "name": "constant.numeric.float.xers",
-          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*([eE][+-]?[0-9_]+)?\\b"
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*\\b"
         },
         {
           "name": "constant.numeric.integer.xers",
@@ -177,15 +352,110 @@
     "function-definition": {
       "patterns": [
         {
-          "match": "\\b(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(",
+          "name": "meta.function.definition.xers",
+          "begin": "\\b(fn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(\\()",
+          "end": "(\\))",
+          "beginCaptures": {
+            "1": { "name": "keyword.declaration.function.xers" },
+            "2": { "name": "entity.name.function.definition.xers" },
+            "3": { "name": "punctuation.definition.parameters.begin.xers" }
+          },
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.parameters.end.xers" }
+          },
+          "patterns": [
+            { "include": "#function-parameters" }
+          ]
+        },
+        {
+          "name": "meta.function.return-type.xers",
+          "match": "(->)\\s*([a-zA-Z_][a-zA-Z0-9_]*)",
           "captures": {
-            "1": {
-              "name": "keyword.declaration.function.xers"
-            },
-            "2": {
-              "name": "entity.name.function.xers"
-            }
+            "1": { "name": "keyword.operator.arrow.xers" },
+            "2": { "name": "storage.type.return.xers" }
           }
+        }
+      ]
+    },
+    "function-parameters": {
+      "patterns": [
+        {
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(:)\\s*(mut\\s+)?([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "variable.parameter.xers" },
+            "2": { "name": "keyword.operator.type-annotation.xers" },
+            "3": { "name": "keyword.other.modifier.xers" },
+            "4": { "name": "storage.type.parameter.xers" }
+          }
+        },
+        {
+          "name": "variable.parameter.xers",
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b(?=\\s*:)"
+        },
+        { "include": "#types" },
+        { "include": "#operators" },
+        { "include": "#punctuation" }
+      ]
+    },
+    "struct-definition": {
+      "patterns": [
+        {
+          "match": "\\b(struct)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.struct.xers" },
+            "2": { "name": "entity.name.type.struct.xers" }
+          }
+        }
+      ]
+    },
+    "enum-definition": {
+      "patterns": [
+        {
+          "match": "\\b(enum)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.enum.xers" },
+            "2": { "name": "entity.name.type.enum.xers" }
+          }
+        }
+      ]
+    },
+    "impl-block": {
+      "patterns": [
+        {
+          "match": "\\b(impl)\\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\\s+(for)\\s+([a-zA-Z_][a-zA-Z0-9_]*))?",
+          "captures": {
+            "1": { "name": "keyword.declaration.impl.xers" },
+            "2": { "name": "entity.name.type.impl.xers" },
+            "3": { "name": "keyword.other.for.xers" },
+            "4": { "name": "entity.name.type.target.xers" }
+          }
+        }
+      ]
+    },
+    "trait-definition": {
+      "patterns": [
+        {
+          "match": "\\b(trait)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.trait.xers" },
+            "2": { "name": "entity.name.type.trait.xers" }
+          }
+        }
+      ]
+    },
+    "module-path": {
+      "patterns": [
+        {
+          "match": "([a-zA-Z_][a-zA-Z0-9_]*)(::)([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "entity.name.namespace.xers" },
+            "2": { "name": "keyword.operator.namespace.xers" },
+            "3": { "name": "entity.name.type.xers" }
+          }
+        },
+        {
+          "name": "keyword.operator.namespace.xers",
+          "match": "::"
         }
       ]
     },
@@ -194,15 +464,17 @@
         {
           "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
           "captures": {
-            "1": {
-              "name": "entity.name.function.call.xers"
-            }
+            "1": { "name": "entity.name.function.call.xers" }
           }
         }
       ]
     },
     "operators": {
       "patterns": [
+        {
+          "name": "keyword.operator.fat-arrow.xers",
+          "match": "=>"
+        },
         {
           "name": "keyword.operator.arrow.xers",
           "match": "->"
@@ -212,31 +484,107 @@
           "match": "==|!=|<=|>=|<|>"
         },
         {
-          "name": "keyword.operator.logical.xers",
-          "match": "&&|\\|\\||!"
+          "name": "keyword.operator.logical.and.xers",
+          "match": "&&"
         },
         {
-          "name": "keyword.operator.arithmetic.xers",
-          "match": "\\+|\\-|\\*|\\/|%"
+          "name": "keyword.operator.logical.or.xers",
+          "match": "\\|\\|"
         },
         {
-          "name": "keyword.operator.bitwise.xers",
-          "match": "&|\\||\\^|<<|>>|~"
+          "name": "keyword.operator.logical.not.xers",
+          "match": "!"
         },
         {
-          "name": "keyword.operator.assignment.compound.xers",
-          "match": "\\+=|\\-=|\\*=|\\/=|%=|&=|\\|=|\\^=|<<=|>>="
+          "name": "keyword.operator.bitwise.shift-left.xers",
+          "match": "<<"
+        },
+        {
+          "name": "keyword.operator.bitwise.shift-right.xers",
+          "match": ">>"
+        },
+        {
+          "name": "keyword.operator.bitwise.and.xers",
+          "match": "&"
+        },
+        {
+          "name": "keyword.operator.bitwise.or.xers",
+          "match": "\\|"
+        },
+        {
+          "name": "keyword.operator.bitwise.xor.xers",
+          "match": "\\^"
+        },
+        {
+          "name": "keyword.operator.bitwise.not.xers",
+          "match": "~"
+        },
+        {
+          "name": "keyword.operator.assignment.compound.add.xers",
+          "match": "\\+="
+        },
+        {
+          "name": "keyword.operator.assignment.compound.subtract.xers",
+          "match": "-="
+        },
+        {
+          "name": "keyword.operator.assignment.compound.multiply.xers",
+          "match": "\\*="
+        },
+        {
+          "name": "keyword.operator.assignment.compound.divide.xers",
+          "match": "/="
+        },
+        {
+          "name": "keyword.operator.assignment.compound.modulo.xers",
+          "match": "%="
+        },
+        {
+          "name": "keyword.operator.assignment.compound.bitwise-and.xers",
+          "match": "&="
+        },
+        {
+          "name": "keyword.operator.assignment.compound.bitwise-or.xers",
+          "match": "\\|="
+        },
+        {
+          "name": "keyword.operator.assignment.compound.bitwise-xor.xers",
+          "match": "\\^="
+        },
+        {
+          "name": "keyword.operator.assignment.compound.shift-left.xers",
+          "match": "<<="
+        },
+        {
+          "name": "keyword.operator.assignment.compound.shift-right.xers",
+          "match": ">>="
+        },
+        {
+          "name": "keyword.operator.arithmetic.add.xers",
+          "match": "\\+"
+        },
+        {
+          "name": "keyword.operator.arithmetic.subtract.xers",
+          "match": "-"
+        },
+        {
+          "name": "keyword.operator.arithmetic.multiply.xers",
+          "match": "\\*"
+        },
+        {
+          "name": "keyword.operator.arithmetic.divide.xers",
+          "match": "/"
+        },
+        {
+          "name": "keyword.operator.arithmetic.modulo.xers",
+          "match": "%"
         },
         {
           "name": "keyword.operator.assignment.xers",
           "match": "="
         },
         {
-          "name": "keyword.operator.namespace.xers",
-          "match": "::"
-        },
-        {
-          "name": "keyword.operator.type.xers",
+          "name": "keyword.operator.type-annotation.xers",
           "match": ":"
         }
       ]
@@ -244,33 +592,49 @@
     "punctuation": {
       "patterns": [
         {
-          "name": "punctuation.terminator.xers",
+          "name": "punctuation.terminator.statement.xers",
           "match": ";"
         },
         {
-          "name": "punctuation.separator.xers",
+          "name": "punctuation.separator.comma.xers",
           "match": ","
         },
         {
-          "name": "punctuation.accessor.xers",
+          "name": "punctuation.accessor.dot.xers",
           "match": "\\."
         },
         {
-          "name": "punctuation.brackets.round.xers",
-          "match": "[()]"
+          "name": "punctuation.brackets.round.open.xers",
+          "match": "\\("
         },
         {
-          "name": "punctuation.brackets.curly.xers",
-          "match": "[{}]"
+          "name": "punctuation.brackets.round.close.xers",
+          "match": "\\)"
         },
         {
-          "name": "punctuation.brackets.square.xers",
-          "match": "[\\[\\]]"
+          "name": "punctuation.brackets.curly.open.xers",
+          "match": "\\{"
+        },
+        {
+          "name": "punctuation.brackets.curly.close.xers",
+          "match": "\\}"
+        },
+        {
+          "name": "punctuation.brackets.square.open.xers",
+          "match": "\\["
+        },
+        {
+          "name": "punctuation.brackets.square.close.xers",
+          "match": "\\]"
         }
       ]
     },
     "variables": {
       "patterns": [
+        {
+          "name": "variable.other.constant.xers",
+          "match": "\\b[A-Z][A-Z0-9_]*\\b"
+        },
         {
           "name": "variable.other.xers",
           "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"

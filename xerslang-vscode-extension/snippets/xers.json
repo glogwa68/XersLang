@@ -15,7 +15,7 @@
       "\t$0",
       "}"
     ],
-    "description": "Define a function with no return value"
+    "description": "Define a function with no return value (void)"
   },
   "Main Function": {
     "prefix": "main",
@@ -34,7 +34,72 @@
       "\t$0",
       "}"
     ],
-    "description": "Create simple main function"
+    "description": "Create simple main function without return"
+  },
+  "Main With Args": {
+    "prefix": "mainargs",
+    "body": [
+      "fn main() -> i64 {",
+      "\tlet argc = get_argc();",
+      "\tif argc < ${1:2} {",
+      "\t\tprint_str(\"Usage: ${2:program} <${3:args}>\\n\");",
+      "\t\treturn 1;",
+      "\t}",
+      "\t",
+      "\t$0",
+      "\t",
+      "\treturn 0;",
+      "}"
+    ],
+    "description": "Main function with command-line argument processing"
+  },
+  "Struct Definition": {
+    "prefix": "struct",
+    "body": [
+      "struct ${1:Name} {",
+      "\t${2:field1}: ${3:i64},",
+      "\t${4:field2}: ${5:i64},$0",
+      "}"
+    ],
+    "description": "Define a new struct with fields"
+  },
+  "Impl Block": {
+    "prefix": "impl",
+    "body": [
+      "impl ${1:StructName} {",
+      "\tfn ${2:method}(&self${3:, params}) -> ${4:i64} {",
+      "\t\t$0",
+      "\t}",
+      "}"
+    ],
+    "description": "Implementation block for struct methods"
+  },
+  "Enum Definition": {
+    "prefix": "enum",
+    "body": [
+      "enum ${1:Name} {",
+      "\t${2:Variant1},",
+      "\t${3:Variant2},$0",
+      "}"
+    ],
+    "description": "Define a new enum with variants"
+  },
+  "Match Expression": {
+    "prefix": "match",
+    "body": [
+      "match ${1:expr} {",
+      "\t${2:pattern1} => {",
+      "\t\t$3",
+      "\t},",
+      "\t${4:pattern2} => {",
+      "\t\t$5",
+      "\t},",
+      "\t_ => {",
+      "\t\t$0",
+      "\t}",
+      "}"
+    ],
+    "description": "Match expression with pattern matching"
   },
   "If Statement": {
     "prefix": "if",
@@ -56,6 +121,19 @@
     ],
     "description": "If-else statement"
   },
+  "Else If Chain": {
+    "prefix": "elif",
+    "body": [
+      "if ${1:condition1} {",
+      "\t$2",
+      "} else if ${3:condition2} {",
+      "\t$4",
+      "} else {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Else-if chain with multiple conditions"
+  },
   "While Loop": {
     "prefix": "while",
     "body": [
@@ -64,6 +142,365 @@
       "}"
     ],
     "description": "While loop"
+  },
+  "Infinite Loop": {
+    "prefix": "loop",
+    "body": [
+      "while 1 {",
+      "\t$0",
+      "\t// break; // Use break to exit",
+      "}"
+    ],
+    "description": "Infinite loop (while 1)"
+  },
+  "For-like Loop": {
+    "prefix": "fori",
+    "body": [
+      "let ${1:i} = ${2:0};",
+      "while ${1:i} < ${3:n} {",
+      "\t$0",
+      "\t${1:i} = ${1:i} + 1;",
+      "}"
+    ],
+    "description": "For-like loop using while with index"
+  },
+  "For Loop Reverse": {
+    "prefix": "forr",
+    "body": [
+      "let ${1:i} = ${2:n} - 1;",
+      "while ${1:i} >= ${3:0} {",
+      "\t$0",
+      "\t${1:i} = ${1:i} - 1;",
+      "}"
+    ],
+    "description": "Reverse for-like loop (counting down)"
+  },
+  "Get Argc": {
+    "prefix": "getargc",
+    "body": [
+      "let ${1:argc} = get_argc();"
+    ],
+    "description": "Get command-line argument count"
+  },
+  "Get Arg": {
+    "prefix": "getarg",
+    "body": [
+      "let ${1:arg} = get_arg(${2:index});"
+    ],
+    "description": "Get command-line argument at index"
+  },
+  "Parse Args Template": {
+    "prefix": "parseargs",
+    "body": [
+      "// Parse command-line arguments",
+      "let argc = get_argc();",
+      "let i = 1;  // Skip program name",
+      "while i < argc {",
+      "\tlet arg = get_arg(i);",
+      "\tif streq(arg, \"--${1:flag}\") {",
+      "\t\t${2:// Handle flag}",
+      "\t} else if streq(arg, \"-${3:h}\") {",
+      "\t\t${4:// Handle short option}",
+      "\t} else {",
+      "\t\t${5:// Handle positional argument}",
+      "\t}",
+      "\ti = i + 1;",
+      "}",
+      "$0"
+    ],
+    "description": "Complete argument parsing template"
+  },
+  "List Directory": {
+    "prefix": "listdir",
+    "body": [
+      "let ${1:entries} = list_dir(${2:\"path\"});",
+      "let ${3:i} = 0;",
+      "let ${4:entry} = get_entry(${1:entries}, ${3:i});",
+      "while ${4:entry} != 0 {",
+      "\t$0",
+      "\t${3:i} = ${3:i} + 1;",
+      "\t${4:entry} = get_entry(${1:entries}, ${3:i});",
+      "}"
+    ],
+    "description": "List directory entries with iteration"
+  },
+  "Walk Directory Recursive": {
+    "prefix": "walkdir",
+    "body": [
+      "fn walk_dir(path) {",
+      "\tlet entries = list_dir(path);",
+      "\tlet i = 0;",
+      "\tlet entry = get_entry(entries, i);",
+      "\twhile entry != 0 {",
+      "\t\tlet full_path = path_join(path, entry);",
+      "\t\tif is_dir(full_path) {",
+      "\t\t\twalk_dir(full_path);  // Recurse",
+      "\t\t} else {",
+      "\t\t\t${1:// Process file}",
+      "\t\t\t$0",
+      "\t\t}",
+      "\t\ti = i + 1;",
+      "\t\tentry = get_entry(entries, i);",
+      "\t}",
+      "}"
+    ],
+    "description": "Recursive directory walking template"
+  },
+  "Find Files": {
+    "prefix": "findfiles",
+    "body": [
+      "fn find_files(dir, suffix) {",
+      "\tlet entries = list_dir(dir);",
+      "\tlet i = 0;",
+      "\tlet entry = get_entry(entries, i);",
+      "\twhile entry != 0 {",
+      "\t\tlet full_path = path_join(dir, entry);",
+      "\t\tif is_file(full_path) {",
+      "\t\t\tif str_ends_with(entry, suffix) {",
+      "\t\t\t\t${1:// Found matching file}",
+      "\t\t\t\tprint_str(full_path);",
+      "\t\t\t}",
+      "\t\t} else if is_dir(full_path) {",
+      "\t\t\tfind_files(full_path, suffix);  // Recurse",
+      "\t\t}",
+      "\t\ti = i + 1;",
+      "\t\tentry = get_entry(entries, i);",
+      "\t}",
+      "}",
+      "$0"
+    ],
+    "description": "Find files matching pattern recursively"
+  },
+  "Is Directory": {
+    "prefix": "isdir",
+    "body": [
+      "if is_dir(${1:path}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Check if path is a directory"
+  },
+  "Is File": {
+    "prefix": "isfile",
+    "body": [
+      "if is_file(${1:path}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Check if path is a regular file"
+  },
+  "Path Join": {
+    "prefix": "pathjoin",
+    "body": [
+      "let ${1:full_path} = path_join(${2:dir}, ${3:name});"
+    ],
+    "description": "Join path components"
+  },
+  "String Copy": {
+    "prefix": "strcopy",
+    "body": [
+      "let ${1:dest} = alloc(${2:256});",
+      "str_copy(${1:dest}, ${3:src});"
+    ],
+    "description": "Copy string to new buffer"
+  },
+  "String Ends With": {
+    "prefix": "strendswith",
+    "body": [
+      "if str_ends_with(${1:str}, ${2:\".xers\"}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Check if string ends with suffix"
+  },
+  "Filter Strings": {
+    "prefix": "strfilter",
+    "body": [
+      "fn filter_by_suffix(entries, suffix) -> i64 {",
+      "\tlet count = 0;",
+      "\tlet i = 0;",
+      "\tlet entry = get_entry(entries, i);",
+      "\twhile entry != 0 {",
+      "\t\tif str_ends_with(entry, suffix) {",
+      "\t\t\tcount = count + 1;",
+      "\t\t\t$0",
+      "\t\t}",
+      "\t\ti = i + 1;",
+      "\t\tentry = get_entry(entries, i);",
+      "\t}",
+      "\treturn count;",
+      "}"
+    ],
+    "description": "Filter strings by suffix"
+  },
+  "CLI Tool Template": {
+    "prefix": "clitool",
+    "body": [
+      "// ${1:Tool Name}: ${2:Description}",
+      "// Usage: ${3:toolname} [options] <input>",
+      "",
+      "fn print_usage() {",
+      "\tprint_str(\"Usage: ${3:toolname} [options] <input>\\n\");",
+      "\tprint_str(\"Options:\\n\");",
+      "\tprint_str(\"  -h, --help    Show this help\\n\");",
+      "\tprint_str(\"  -v, --verbose Enable verbose output\\n\");",
+      "}",
+      "",
+      "fn main() -> i64 {",
+      "\tlet argc = get_argc();",
+      "\tlet verbose = 0;",
+      "\tlet input_file = 0;",
+      "\t",
+      "\tif argc < 2 {",
+      "\t\tprint_usage();",
+      "\t\treturn 1;",
+      "\t}",
+      "\t",
+      "\t// Parse arguments",
+      "\tlet i = 1;",
+      "\twhile i < argc {",
+      "\t\tlet arg = get_arg(i);",
+      "\t\tif streq(arg, \"-h\") {",
+      "\t\t\tprint_usage();",
+      "\t\t\treturn 0;",
+      "\t\t} else if streq(arg, \"--help\") {",
+      "\t\t\tprint_usage();",
+      "\t\t\treturn 0;",
+      "\t\t} else if streq(arg, \"-v\") {",
+      "\t\t\tverbose = 1;",
+      "\t\t} else if streq(arg, \"--verbose\") {",
+      "\t\t\tverbose = 1;",
+      "\t\t} else {",
+      "\t\t\tinput_file = arg;",
+      "\t\t}",
+      "\t\ti = i + 1;",
+      "\t}",
+      "\t",
+      "\tif input_file == 0 {",
+      "\t\tprint_str(\"Error: No input file specified\\n\");",
+      "\t\treturn 1;",
+      "\t}",
+      "\t",
+      "\t$0",
+      "\t",
+      "\treturn 0;",
+      "}"
+    ],
+    "description": "Complete CLI tool skeleton with argument parsing"
+  },
+  "File Processor Template": {
+    "prefix": "fileprocessor",
+    "body": [
+      "// Process file line by line",
+      "fn process_file(filename) -> i64 {",
+      "\tlet content = read_file(filename);",
+      "\tif content == 0 {",
+      "\t\tprint_str(\"Error: Cannot read file\\n\");",
+      "\t\treturn 0;",
+      "\t}",
+      "\t",
+      "\tlet result = 0;",
+      "\tlet i = 0;",
+      "\tlet line_start = 0;",
+      "\tlet c = peek(content, i);",
+      "\t",
+      "\twhile c != 0 {",
+      "\t\tif c == 10 {  // newline",
+      "\t\t\t// Process line from line_start to i",
+      "\t\t\t${1:// Process line}",
+      "\t\t\tline_start = i + 1;",
+      "\t\t}",
+      "\t\ti = i + 1;",
+      "\t\tc = peek(content, i);",
+      "\t}",
+      "\t",
+      "\t// Process last line if no trailing newline",
+      "\tif i > line_start {",
+      "\t\t${2:// Process final line}",
+      "\t}",
+      "\t",
+      "\treturn result;",
+      "}",
+      "$0"
+    ],
+    "description": "File processing template with line-by-line iteration"
+  },
+  "Recursive Function Template": {
+    "prefix": "recursive",
+    "body": [
+      "fn ${1:recurse}(${2:n}: i64) -> i64 {",
+      "\t// Base case",
+      "\tif ${2:n} ${3:<=} ${4:0} {",
+      "\t\treturn ${5:0};",
+      "\t}",
+      "\t",
+      "\t// Recursive case",
+      "\t$0",
+      "\treturn ${1:recurse}(${2:n} - 1);",
+      "}"
+    ],
+    "description": "Recursive function template with base case"
+  },
+  "Binary Search Template": {
+    "prefix": "binarysearch",
+    "body": [
+      "fn binary_search(arr, size, target) -> i64 {",
+      "\tlet left = 0;",
+      "\tlet right = size - 1;",
+      "\t",
+      "\twhile left <= right {",
+      "\t\tlet mid = left + (right - left) / 2;",
+      "\t\tlet val = peek(arr + mid * 8);",
+      "\t\t",
+      "\t\tif val == target {",
+      "\t\t\treturn mid;  // Found",
+      "\t\t} else if val < target {",
+      "\t\t\tleft = mid + 1;",
+      "\t\t} else {",
+      "\t\t\tright = mid - 1;",
+      "\t\t}",
+      "\t}",
+      "\t",
+      "\treturn 0 - 1;  // Not found",
+      "}",
+      "$0"
+    ],
+    "description": "Binary search implementation"
+  },
+  "Quicksort Template": {
+    "prefix": "quicksort",
+    "body": [
+      "fn swap(arr, i, j) {",
+      "\tlet temp = peek(arr + i * 8);",
+      "\tpoke(arr + i * 8, peek(arr + j * 8));",
+      "\tpoke(arr + j * 8, temp);",
+      "}",
+      "",
+      "fn partition(arr, low, high) -> i64 {",
+      "\tlet pivot = peek(arr + high * 8);",
+      "\tlet i = low - 1;",
+      "\tlet j = low;",
+      "\twhile j < high {",
+      "\t\tif peek(arr + j * 8) < pivot {",
+      "\t\t\ti = i + 1;",
+      "\t\t\tswap(arr, i, j);",
+      "\t\t}",
+      "\t\tj = j + 1;",
+      "\t}",
+      "\tswap(arr, i + 1, high);",
+      "\treturn i + 1;",
+      "}",
+      "",
+      "fn quicksort(arr, low, high) {",
+      "\tif low < high {",
+      "\t\tlet pi = partition(arr, low, high);",
+      "\t\tquicksort(arr, low, pi - 1);",
+      "\t\tquicksort(arr, pi + 1, high);",
+      "\t}",
+      "}",
+      "$0"
+    ],
+    "description": "Quicksort implementation"
   },
   "Let Binding": {
     "prefix": "let",
@@ -79,6 +516,32 @@
     ],
     "description": "Variable binding with type inference"
   },
+  "Buffer Allocation": {
+    "prefix": "buffer",
+    "body": [
+      "let ${1:buffer} = alloc(${2:256});",
+      "$0"
+    ],
+    "description": "Allocate a memory buffer"
+  },
+  "Array Allocation": {
+    "prefix": "array",
+    "body": [
+      "let ${1:arr} = alloc(${2:size} * 8);  // Array of ${2:size} i64 elements",
+      "// Access: peek(${1:arr} + index * 8)",
+      "// Write:  poke(${1:arr} + index * 8, value)",
+      "$0"
+    ],
+    "description": "Allocate array and access pattern"
+  },
+  "String Buffer": {
+    "prefix": "string",
+    "body": [
+      "let ${1:str} = alloc(${2:256});",
+      "str_copy(${1:str}, ${3:\"initial value\"});"
+    ],
+    "description": "Allocate string buffer with initial value"
+  },
   "Allocate Memory": {
     "prefix": "alloc",
     "body": [
@@ -93,12 +556,76 @@
     ],
     "description": "Read value from memory with peek builtin"
   },
+  "Peek With Offset": {
+    "prefix": "peeko",
+    "body": [
+      "let ${1:value} = peek(${2:ptr}, ${3:offset});"
+    ],
+    "description": "Read value from memory at offset"
+  },
   "Poke Value": {
     "prefix": "poke",
     "body": [
       "poke(${1:ptr}, ${2:value});"
     ],
     "description": "Write value to memory with poke builtin"
+  },
+  "Print Integer": {
+    "prefix": "printi",
+    "body": [
+      "print_int(${1:value});"
+    ],
+    "description": "Print integer value"
+  },
+  "Print String": {
+    "prefix": "prints",
+    "body": [
+      "print_str(${1:\"message\\n\"});"
+    ],
+    "description": "Print string with newline"
+  },
+  "Read File": {
+    "prefix": "readfile",
+    "body": [
+      "let ${1:content} = read_file(${2:\"filename\"});",
+      "if ${1:content} == 0 {",
+      "\tprint_str(\"Error: Cannot read file\\n\");",
+      "\treturn 1;",
+      "}",
+      "$0"
+    ],
+    "description": "Read file with error handling"
+  },
+  "Write File": {
+    "prefix": "writefile",
+    "body": [
+      "let ${1:result} = write_file(${2:\"filename\"}, ${3:content}, ${4:size});",
+      "if ${1:result} == 0 {",
+      "\tprint_str(\"Error: Cannot write file\\n\");",
+      "\treturn 1;",
+      "}",
+      "$0"
+    ],
+    "description": "Write to file with error handling"
+  },
+  "Copy File Template": {
+    "prefix": "copyfile",
+    "body": [
+      "fn copy_file(src, dst) -> i64 {",
+      "\tlet size = file_len(src);",
+      "\tif size == 0 {",
+      "\t\treturn 0;  // Failed or empty",
+      "\t}",
+      "\tlet content = read_file(src);",
+      "\tif content == 0 {",
+      "\t\treturn 0;  // Failed to read",
+      "\t}",
+      "\tlet result = write_file(dst, content, size);",
+      "\treturn result;",
+      "}",
+      "$0"
+    ],
+    "description": "Copy file from source to destination"
   },
   "String Length": {
     "prefix": "strlen",
@@ -116,33 +643,12 @@
     ],
     "description": "Compare strings with streq builtin"
   },
-  "Print Integer": {
-    "prefix": "printi",
-    "body": [
-      "print_int(${1:value});"
-    ],
-    "description": "Print integer with print_int builtin"
-  },
-  "Read File": {
-    "prefix": "readf",
-    "body": [
-      "let ${1:content} = read_file(${2:\"filename\"});"
-    ],
-    "description": "Read file contents with read_file builtin"
-  },
   "File Length": {
     "prefix": "flen",
     "body": [
       "let ${1:size} = file_len(${2:\"filename\"});"
     ],
     "description": "Get file size with file_len builtin"
-  },
-  "Write File": {
-    "prefix": "writef",
-    "body": [
-      "write_file(${1:\"filename\"}, ${2:content}, ${3:size});"
-    ],
-    "description": "Write to file with write_file builtin"
   },
   "Return Statement": {
     "prefix": "ret",
@@ -158,12 +664,57 @@
     ],
     "description": "Return 0 (success)"
   },
+  "Return 1": {
+    "prefix": "ret1",
+    "body": [
+      "return 1;"
+    ],
+    "description": "Return 1 (error/failure)"
+  },
   "Exit Program": {
     "prefix": "exit",
     "body": [
       "exit(${1:0});"
     ],
     "description": "Exit program with exit code"
+  },
+  "File Header Comment": {
+    "prefix": "header",
+    "body": [
+      "// ${1:File Name}: ${2:Brief description}",
+      "// ${3:More detailed description of what this file does}",
+      "//",
+      "// Author: ${4:Name}",
+      "// Created: ${CURRENT_YEAR}-${CURRENT_MONTH}-${CURRENT_DATE}",
+      "",
+      "$0"
+    ],
+    "description": "File header comment block"
+  },
+  "TODO Comment": {
+    "prefix": "todo",
+    "body": [
+      "// TODO: ${1:description}"
+    ],
+    "description": "TODO comment"
+  },
+  "FIXME Comment": {
+    "prefix": "fixme",
+    "body": [
+      "// FIXME: ${1:description}"
+    ],
+    "description": "FIXME comment"
+  },
+  "Function Documentation": {
+    "prefix": "docfn",
+    "body": [
+      "// ${1:function_name}: ${2:Brief description}",
+      "// Parameters:",
+      "//   ${3:param1} - ${4:description}",
+      "// Returns: ${5:description of return value}",
+      "$0"
+    ],
+    "description": "Function documentation comment"
   },
   "Comment Block": {
     "prefix": "/*",
@@ -174,25 +725,15 @@
     ],
     "description": "Multi-line comment block"
   },
-  "For-like Loop": {
-    "prefix": "fori",
+  "Section Comment": {
+    "prefix": "section",
     "body": [
-      "let ${1:i} = ${2:0};",
-      "while ${1:i} < ${3:n} {",
-      "\t$0",
-      "\t${1:i} = ${1:i} + 1;",
-      "}"
-    ],
-    "description": "For-like loop using while"
-  },
-  "Buffer Operations": {
-    "prefix": "buffer",
-    "body": [
-      "let ${1:buffer} = alloc(${2:256});",
-      "// Use buffer...",
+      "// ============================================",
+      "// ${1:Section Name}",
+      "// ============================================",
       "$0"
     ],
-    "description": "Allocate and use a buffer"
+    "description": "Section divider comment"
   },
   "Fibonacci Template": {
     "prefix": "fib",
@@ -214,5 +755,146 @@
       "}"
     ],
     "description": "Fibonacci function template"
+  },
+  "Is Whitespace Helper": {
+    "prefix": "iswhitespace",
+    "body": [
+      "fn is_whitespace(c) -> i64 {",
+      "\tif c == 32 { return 1; }  // space",
+      "\tif c == 9 { return 1; }   // tab",
+      "\tif c == 13 { return 1; }  // CR",
+      "\tif c == 10 { return 1; }  // LF",
+      "\treturn 0;",
+      "}"
+    ],
+    "description": "Helper function to check whitespace characters"
+  },
+  "Is Digit Helper": {
+    "prefix": "isdigit",
+    "body": [
+      "fn is_digit(c) -> i64 {",
+      "\tif c >= 48 {  // '0'",
+      "\t\tif c <= 57 {  // '9'",
+      "\t\t\treturn 1;",
+      "\t\t}",
+      "\t}",
+      "\treturn 0;",
+      "}"
+    ],
+    "description": "Helper function to check if character is digit"
+  },
+  "Is Alpha Helper": {
+    "prefix": "isalpha",
+    "body": [
+      "fn is_alpha(c) -> i64 {",
+      "\tif c >= 65 {",
+      "\t\tif c <= 90 { return 1; }  // A-Z",
+      "\t}",
+      "\tif c >= 97 {",
+      "\t\tif c <= 122 { return 1; }  // a-z",
+      "\t}",
+      "\treturn 0;",
+      "}"
+    ],
+    "description": "Helper function to check if character is alphabetic"
+  },
+  "Parse Integer": {
+    "prefix": "parseint",
+    "body": [
+      "fn parse_int(str) -> i64 {",
+      "\tlet result = 0;",
+      "\tlet i = 0;",
+      "\tlet c = peek(str, i);",
+      "\tlet sign = 1;",
+      "\t",
+      "\t// Handle negative",
+      "\tif c == 45 {  // '-'",
+      "\t\tsign = 0 - 1;",
+      "\t\ti = i + 1;",
+      "\t\tc = peek(str, i);",
+      "\t}",
+      "\t",
+      "\twhile c >= 48 {",
+      "\t\tif c > 57 { break; }",
+      "\t\tresult = result * 10 + (c - 48);",
+      "\t\ti = i + 1;",
+      "\t\tc = peek(str, i);",
+      "\t}",
+      "\t",
+      "\treturn result * sign;",
+      "}",
+      "$0"
+    ],
+    "description": "Parse integer from string"
+  },
+  "Break": {
+    "prefix": "break",
+    "body": [
+      "break;"
+    ],
+    "description": "Break out of loop"
+  },
+  "Continue": {
+    "prefix": "continue",
+    "body": [
+      "continue;"
+    ],
+    "description": "Continue to next iteration"
+  },
+  "Assert": {
+    "prefix": "assert",
+    "body": [
+      "if ${1:condition} == 0 {",
+      "\tprint_str(\"Assertion failed: ${2:message}\\n\");",
+      "\texit(1);",
+      "}"
+    ],
+    "description": "Runtime assertion check"
+  },
+  "Debug Print": {
+    "prefix": "dbg",
+    "body": [
+      "print_str(\"DEBUG: ${1:message}\\n\");",
+      "print_int(${2:value});"
+    ],
+    "description": "Debug print statement"
+  },
+  "Error Print": {
+    "prefix": "err",
+    "body": [
+      "print_str(\"Error: ${1:message}\\n\");",
+      "return ${2:1};"
+    ],
+    "description": "Print error and return"
+  },
+  "Min Function": {
+    "prefix": "min",
+    "body": [
+      "fn min(a: i64, b: i64) -> i64 {",
+      "\tif a < b { return a; }",
+      "\treturn b;",
+      "}"
+    ],
+    "description": "Minimum of two values"
+  },
+  "Max Function": {
+    "prefix": "max",
+    "body": [
+      "fn max(a: i64, b: i64) -> i64 {",
+      "\tif a > b { return a; }",
+      "\treturn b;",
+      "}"
+    ],
+    "description": "Maximum of two values"
+  },
+  "Abs Function": {
+    "prefix": "abs",
+    "body": [
+      "fn abs(n: i64) -> i64 {",
+      "\tif n < 0 { return 0 - n; }",
+      "\treturn n;",
+      "}"
+    ],
+    "description": "Absolute value function"
   }
 }
