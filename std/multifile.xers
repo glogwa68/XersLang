@@ -1,0 +1,881 @@
+// ============================================================================
+// XersLang Standard Library - Multi-File Compilation Module
+// ============================================================================
+// Provides functions for compiling multiple .xers files from a project
+// directory structure. Enables scanning source directories, resolving
+// compilation order based on dependencies, and linking compiled files.
+//
+// Builtins used:
+//   - list_dir(path) -> ptr    : Open directory for iteration
+//   - dir_next(handle) -> str  : Get next filename (0 if done)
+//   - dir_close(handle)        : Close directory handle
+//   - is_dir(path) -> i64      : Check if path is directory
+//   - is_file(path) -> i64     : Check if path is file
+//   - str_ends_with(s, suffix) : Check string suffix
+//   - path_join(base, name)    : Join path components
+//   - read_file(path, buf, len): Read file contents
+//   - alloc(size)              : Allocate memory
+//   - strlen(s)                : Get string length
+//   - peek/poke                : Byte-level memory access
+// ============================================================================
+
+// ============================================================================
+// SECTION 1: CONSTANTS AND CONFIGURATION
+// ============================================================================
+
+// Maximum number of source files in a project
+fn MAX_SOURCE_FILES() { return 256; }
+
+// Maximum path length for file paths
+fn MAX_PATH_LEN() { return 512; }
+
+// File list entry size: 8 bytes for pointer to path string
+fn FILE_ENTRY_SIZE() { return 8; }
+
+// File info structure offsets (per file entry in extended list)
+fn FI_PATH() { return 0; }       // Pointer to file path string
+fn FI_FLAGS() { return 8; }      // Flags (is_lib, is_main, priority)
+fn FI_DEPS() { return 16; }      // Pointer to dependencies list
+fn FI_DEPCOUNT() { return 24; }  // Number of dependencies
+fn FI_COMPILED() { return 32; }  // Compiled flag
+fn FI_AST() { return 40; }       // Pointer to AST/code
+fn FI_SIZE() { return 48; }      // Total size of file info struct
+
+// File flags
+fn FLAG_IS_LIB() { return 1; }   // File is lib.xers
+fn FLAG_IS_MAIN() { return 2; }  // File is main.xers
+fn FLAG_STDLIB() { return 4; }   // File is from stdlib
+
+// Compilation result codes
+fn COMPILE_OK() { return 0; }
+fn COMPILE_ERR_FILE_NOT_FOUND() { return 1; }
+fn COMPILE_ERR_PARSE() { return 2; }
+fn COMPILE_ERR_CODEGEN() { return 3; }
+fn COMPILE_ERR_TOO_MANY_FILES() { return 4; }
+fn COMPILE_ERR_CIRCULAR_DEP() { return 5; }
+
+// ============================================================================
+// SECTION 2: MEMORY UTILITIES (local copies for standalone use)
+// ============================================================================
+
+fn mf_mem_write_i64(buf, off, val) {
+    poke(buf, off, val);
+    poke(buf, off + 1, val / 256);
+    poke(buf, off + 2, val / 65536);
+    poke(buf, off + 3, val / 16777216);
+    poke(buf, off + 4, val / 4294967296);
+    poke(buf, off + 5, val / 1099511627776);
+    poke(buf, off + 6, val / 281474976710656);
+    poke(buf, off + 7, val / 72057594037927936);
+    return 0;
+}
+
+fn mf_mem_read_i64(buf, off) {
+    let b0 = peek(buf, off);
+    let b1 = peek(buf, off + 1);
+    let b2 = peek(buf, off + 2);
+    let b3 = peek(buf, off + 3);
+    let b4 = peek(buf, off + 4);
+    let b5 = peek(buf, off + 5);
+    let b6 = peek(buf, off + 6);
+    let b7 = peek(buf, off + 7);
+    return b0 + b1*256 + b2*65536 + b3*16777216 + b4*4294967296 + b5*1099511627776 + b6*281474976710656 + b7*72057594037927936;
+}
+
+// ============================================================================
+// SECTION 3: STRING UTILITIES
+// ============================================================================
+
+// Calculate length of null-terminated string at pointer
+fn mf_strlen(s) {
+    let len = 0;
+    while peek(s, len) != 0 {
+        len = len + 1;
+    }
+    return len;
+}
+
+// Copy null-terminated string from src to dst
+// Returns pointer to dst
+fn mf_strcpy(dst, src) {
+    let i = 0;
+    let c = peek(src, i);
+    while c != 0 {
+        poke(dst, i, c);
+        i = i + 1;
+        c = peek(src, i);
+    }
+    poke(dst, i, 0);
+    return dst;
+}
+
+// Allocate and copy string
+fn mf_strdup(src) {
+    let len = mf_strlen(src);
+    let dst = alloc(len + 1);
+    mf_strcpy(dst, src);
+    return dst;
+}
+
+// Compare two strings for equality
+// Returns 1 if equal, 0 otherwise
+fn mf_streq(a, b) {
+    let i = 0;
+    while 1 == 1 {
+        let ca = peek(a, i);
+        let cb = peek(b, i);
+        if ca != cb {
+            return 0;
+        }
+        if ca == 0 {
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+// Check if filename is "." or ".."
+// Returns 1 if it's a dot directory, 0 otherwise
+fn is_dot_dir(name) {
+    let c0 = peek(name, 0);
+    if c0 != 46 {
+        return 0;
+    }
+    let c1 = peek(name, 1);
+    if c1 == 0 {
+        return 1;
+    }
+    if c1 == 46 {
+        let c2 = peek(name, 2);
+        if c2 == 0 {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Build ".xers" suffix string in buffer
+fn build_xers_suffix(buf) {
+    poke(buf, 0, 46);   // '.'
+    poke(buf, 1, 120);  // 'x'
+    poke(buf, 2, 101);  // 'e'
+    poke(buf, 3, 114);  // 'r'
+    poke(buf, 4, 115);  // 's'
+    poke(buf, 5, 0);    // null terminator
+    return buf;
+}
+
+// Build "lib.xers" filename in buffer
+fn build_lib_filename(buf) {
+    poke(buf, 0, 108);  // 'l'
+    poke(buf, 1, 105);  // 'i'
+    poke(buf, 2, 98);   // 'b'
+    poke(buf, 3, 46);   // '.'
+    poke(buf, 4, 120);  // 'x'
+    poke(buf, 5, 101);  // 'e'
+    poke(buf, 6, 114);  // 'r'
+    poke(buf, 7, 115);  // 's'
+    poke(buf, 8, 0);    // null terminator
+    return buf;
+}
+
+// Build "main.xers" filename in buffer
+fn build_main_filename(buf) {
+    poke(buf, 0, 109);  // 'm'
+    poke(buf, 1, 97);   // 'a'
+    poke(buf, 2, 105);  // 'i'
+    poke(buf, 3, 110);  // 'n'
+    poke(buf, 4, 46);   // '.'
+    poke(buf, 5, 120);  // 'x'
+    poke(buf, 6, 101);  // 'e'
+    poke(buf, 7, 114);  // 'r'
+    poke(buf, 8, 115);  // 's'
+    poke(buf, 9, 0);    // null terminator
+    return buf;
+}
+
+// Check if filename ends with ".xers"
+fn is_xers_file(name) {
+    let suffix = alloc(8);
+    build_xers_suffix(suffix);
+    return str_ends_with(name, suffix);
+}
+
+// Check if filename is "lib.xers"
+fn is_lib_file(name) {
+    let lib_name = alloc(16);
+    build_lib_filename(lib_name);
+    return mf_streq(name, lib_name);
+}
+
+// Check if filename is "main.xers"
+fn is_main_file(name) {
+    let main_name = alloc(16);
+    build_main_filename(main_name);
+    return mf_streq(name, main_name);
+}
+
+// Get filename from full path (everything after last separator)
+fn get_filename(path) {
+    let len = mf_strlen(path);
+    let i = len;
+    while i > 0 {
+        i = i - 1;
+        let c = peek(path, i);
+        if c == 92 {
+            return path + i + 1;
+        }
+        if c == 47 {
+            return path + i + 1;
+        }
+    }
+    return path;
+}
+
+// ============================================================================
+// SECTION 4: FILE LIST MANAGEMENT
+// ============================================================================
+
+// Initialize a file list structure
+// file_list: pointer to allocated buffer (MAX_SOURCE_FILES * FILE_ENTRY_SIZE bytes)
+// count: pointer to i64 holding current count (initialize to 0)
+fn init_file_list(file_list, count) {
+    mf_mem_write_i64(count, 0, 0);
+    return 0;
+}
+
+// Add a file path to the list
+// file_list: pointer to file list buffer
+// count: pointer to count variable
+// file_path: null-terminated path string (will be duplicated)
+// Returns: 0 on success, error code on failure
+fn add_source_file(file_list, count, file_path) {
+    let current_count = mf_mem_read_i64(count, 0);
+
+    // Check for maximum files exceeded
+    if current_count >= MAX_SOURCE_FILES() {
+        return COMPILE_ERR_TOO_MANY_FILES();
+    }
+
+    // Check for duplicates
+    let i = 0;
+    while i < current_count {
+        let existing = mf_mem_read_i64(file_list, i * FILE_ENTRY_SIZE());
+        if mf_streq(existing, file_path) == 1 {
+            return 0;
+        }
+        i = i + 1;
+    }
+
+    // Allocate and copy the path
+    let path_copy = mf_strdup(file_path);
+
+    // Store pointer in list
+    let offset = current_count * FILE_ENTRY_SIZE();
+    mf_mem_write_i64(file_list, offset, path_copy);
+
+    // Increment count
+    mf_mem_write_i64(count, 0, current_count + 1);
+
+    return 0;
+}
+
+// Get file path at index
+// file_list: pointer to file list buffer
+// index: 0-based index
+// Returns: pointer to path string, or 0 if out of bounds
+fn get_source_file(file_list, count, index) {
+    let current_count = mf_mem_read_i64(count, 0);
+    if index >= current_count {
+        return 0;
+    }
+    return mf_mem_read_i64(file_list, index * FILE_ENTRY_SIZE());
+}
+
+// ============================================================================
+// SECTION 5: DIRECTORY SCANNING
+// ============================================================================
+
+// Recursively scan a directory for .xers files
+// dir_path: path to directory (null-terminated)
+// file_list: pointer to file list buffer
+// count: pointer to count variable
+// Returns: 0 on success, error code on failure
+fn scan_source_files(dir_path, file_list, count) {
+    // Allocate buffers
+    let full_path = alloc(MAX_PATH_LEN());
+    let wildcard = alloc(MAX_PATH_LEN());
+
+    // Build wildcard pattern: dir_path\*
+    mf_strcpy(wildcard, dir_path);
+    let wildcard_len = mf_strlen(wildcard);
+
+    // Add separator if needed
+    if wildcard_len > 0 {
+        let last_char = peek(wildcard, wildcard_len - 1);
+        if last_char != 92 {
+            if last_char != 47 {
+                poke(wildcard, wildcard_len, 92);
+                wildcard_len = wildcard_len + 1;
+            }
+        }
+    }
+
+    // Add wildcard
+    poke(wildcard, wildcard_len, 42);      // '*'
+    poke(wildcard, wildcard_len + 1, 0);   // null
+
+    // Open directory
+    let handle = list_dir(wildcard);
+    if handle == 0 {
+        return COMPILE_ERR_FILE_NOT_FOUND();
+    }
+
+    // Iterate through entries
+    let name = dir_next(handle);
+    while name != 0 {
+        // Skip "." and ".."
+        if is_dot_dir(name) == 0 {
+            // Build full path
+            mf_strcpy(full_path, dir_path);
+            path_join(full_path, name);
+
+            // Check if it's a directory
+            if is_dir(full_path) == 1 {
+                // Recurse into subdirectory
+                let result = scan_source_files(full_path, file_list, count);
+                if result != 0 {
+                    dir_close(handle);
+                    return result;
+                }
+            } else {
+                // Check if it's a .xers file
+                if is_xers_file(name) == 1 {
+                    let result = add_source_file(file_list, count, full_path);
+                    if result != 0 {
+                        dir_close(handle);
+                        return result;
+                    }
+                }
+            }
+        }
+
+        // Get next entry
+        name = dir_next(handle);
+    }
+
+    // Close directory handle
+    dir_close(handle);
+
+    return 0;
+}
+
+// ============================================================================
+// SECTION 6: COMPILATION ORDER RESOLUTION
+// ============================================================================
+
+// File info list structure for dependency tracking
+// info_list: array of FI_SIZE() byte structures
+// sorted_list: output array of file indices in compilation order
+
+// Create extended file info for a file
+fn create_file_info(info_list, index, file_path) {
+    let base = index * FI_SIZE();
+
+    // Store path pointer
+    mf_mem_write_i64(info_list, base + FI_PATH(), file_path);
+
+    // Determine flags
+    let filename = get_filename(file_path);
+    let flags = 0;
+
+    if is_lib_file(filename) == 1 {
+        flags = flags + FLAG_IS_LIB();
+    }
+    if is_main_file(filename) == 1 {
+        flags = flags + FLAG_IS_MAIN();
+    }
+
+    mf_mem_write_i64(info_list, base + FI_FLAGS(), flags);
+
+    // Initialize other fields
+    mf_mem_write_i64(info_list, base + FI_DEPS(), 0);
+    mf_mem_write_i64(info_list, base + FI_DEPCOUNT(), 0);
+    mf_mem_write_i64(info_list, base + FI_COMPILED(), 0);
+    mf_mem_write_i64(info_list, base + FI_AST(), 0);
+
+    return 0;
+}
+
+// Calculate priority for sorting
+// lib.xers files get priority 0 (first)
+// Regular modules get priority 1
+// main.xers gets priority 2 (last)
+fn get_file_priority(info_list, index) {
+    let base = index * FI_SIZE();
+    let flags = mf_mem_read_i64(info_list, base + FI_FLAGS());
+
+    if flags >= FLAG_IS_MAIN() {
+        let check_main = flags / FLAG_IS_MAIN();
+        let remainder = flags - check_main * FLAG_IS_MAIN();
+        if remainder == 0 {
+            return 2;
+        }
+        if check_main >= 1 {
+            return 2;
+        }
+    }
+
+    if flags >= FLAG_IS_LIB() {
+        let check_lib = flags / FLAG_IS_LIB();
+        if check_lib >= 1 {
+            let rem = flags - check_lib * FLAG_IS_LIB();
+            if rem < FLAG_IS_MAIN() {
+                return 0;
+            }
+        }
+    }
+
+    return 1;
+}
+
+// Resolve compilation order based on file priorities
+// file_list: source file list
+// count: pointer to count
+// sorted_indices: output array of sorted indices
+// Returns: number of files in sorted order
+fn resolve_compile_order(file_list, count, sorted_indices) {
+    let file_count = mf_mem_read_i64(count, 0);
+
+    // Create file info structures
+    let info_list = alloc(file_count * FI_SIZE());
+
+    let i = 0;
+    while i < file_count {
+        let path = mf_mem_read_i64(file_list, i * FILE_ENTRY_SIZE());
+        create_file_info(info_list, i, path);
+        i = i + 1;
+    }
+
+    // Simple priority-based sorting (stable sort preserving discovery order)
+    // Pass 1: Add all lib.xers files (priority 0)
+    let sorted_count = 0;
+    i = 0;
+    while i < file_count {
+        let priority = get_file_priority(info_list, i);
+        if priority == 0 {
+            mf_mem_write_i64(sorted_indices, sorted_count * 8, i);
+            sorted_count = sorted_count + 1;
+        }
+        i = i + 1;
+    }
+
+    // Pass 2: Add all regular modules (priority 1)
+    i = 0;
+    while i < file_count {
+        let priority = get_file_priority(info_list, i);
+        if priority == 1 {
+            mf_mem_write_i64(sorted_indices, sorted_count * 8, i);
+            sorted_count = sorted_count + 1;
+        }
+        i = i + 1;
+    }
+
+    // Pass 3: Add main.xers files (priority 2)
+    i = 0;
+    while i < file_count {
+        let priority = get_file_priority(info_list, i);
+        if priority == 2 {
+            mf_mem_write_i64(sorted_indices, sorted_count * 8, i);
+            sorted_count = sorted_count + 1;
+        }
+        i = i + 1;
+    }
+
+    return sorted_count;
+}
+
+// ============================================================================
+// SECTION 7: SINGLE FILE COMPILATION
+// ============================================================================
+
+// Read a source file into a buffer
+// file_path: path to .xers file
+// size_out: pointer to i64 where size will be stored
+// Returns: pointer to allocated buffer containing file contents, or 0 on error
+fn read_source_file(file_path, size_out) {
+    // Allocate buffer for file (max 1MB)
+    let max_size = 1048576;
+    let buf = alloc(max_size);
+
+    // Read file
+    let bytes_read = read_file(file_path, buf, max_size);
+
+    if bytes_read < 0 {
+        mf_mem_write_i64(size_out, 0, 0);
+        return 0;
+    }
+
+    // Null-terminate
+    poke(buf, bytes_read, 0);
+
+    mf_mem_write_i64(size_out, 0, bytes_read);
+    return buf;
+}
+
+// Compile a single file and return compilation result
+// This is a placeholder that should be integrated with the actual compiler
+// file_path: path to .xers file
+// Returns: pointer to compiled code/AST structure, or 0 on error
+fn compile_single_file(file_path) {
+    let size_holder = alloc(8);
+
+    // Read source
+    let source = read_source_file(file_path, size_holder);
+    if source == 0 {
+        return 0;
+    }
+
+    let size = mf_mem_read_i64(size_holder, 0);
+
+    // TODO: Integrate with actual compiler
+    // This should:
+    // 1. Initialize compiler state
+    // 2. Tokenize source
+    // 3. Parse and generate code
+    // 4. Return code buffer
+
+    // For now, return source as placeholder
+    // The actual integration would call compiler functions like:
+    // - init_compiler_state()
+    // - parse_program(state, source, size)
+    // - codegen(state)
+    // - return code_buffer
+
+    return source;
+}
+
+// ============================================================================
+// SECTION 8: PROJECT COMPILATION
+// ============================================================================
+
+// Project configuration structure offsets
+fn PC_SRC_DIR() { return 0; }       // Source directory path
+fn PC_OUT_FILE() { return 8; }      // Output executable path
+fn PC_FILE_LIST() { return 16; }    // File list buffer pointer
+fn PC_FILE_COUNT() { return 24; }   // File count pointer
+fn PC_CODE_BUF() { return 32; }     // Combined code buffer
+fn PC_CODE_SIZE() { return 40; }    // Current code size
+fn PC_SIZE() { return 48; }         // Total config size
+
+// Initialize project configuration
+fn init_project_config(config, src_dir, out_file) {
+    mf_mem_write_i64(config, PC_SRC_DIR(), src_dir);
+    mf_mem_write_i64(config, PC_OUT_FILE(), out_file);
+
+    // Allocate file list
+    let file_list = alloc(MAX_SOURCE_FILES() * FILE_ENTRY_SIZE());
+    let file_count = alloc(8);
+    mf_mem_write_i64(file_count, 0, 0);
+
+    mf_mem_write_i64(config, PC_FILE_LIST(), file_list);
+    mf_mem_write_i64(config, PC_FILE_COUNT(), file_count);
+
+    // Allocate code buffer (512KB)
+    let code_buf = alloc(524288);
+    mf_mem_write_i64(config, PC_CODE_BUF(), code_buf);
+    mf_mem_write_i64(config, PC_CODE_SIZE(), 0);
+
+    return 0;
+}
+
+// Compile an entire project
+// config: pointer to initialized project configuration
+// Returns: 0 on success, error code on failure
+fn compile_project(config) {
+    let src_dir = mf_mem_read_i64(config, PC_SRC_DIR());
+    let file_list = mf_mem_read_i64(config, PC_FILE_LIST());
+    let file_count = mf_mem_read_i64(config, PC_FILE_COUNT());
+
+    // Step 1: Scan source directory for .xers files
+    let scan_result = scan_source_files(src_dir, file_list, file_count);
+    if scan_result != 0 {
+        return scan_result;
+    }
+
+    let count = mf_mem_read_i64(file_count, 0);
+    if count == 0 {
+        return COMPILE_ERR_FILE_NOT_FOUND();
+    }
+
+    // Step 2: Resolve compilation order
+    let sorted_indices = alloc(count * 8);
+    let sorted_count = resolve_compile_order(file_list, file_count, sorted_indices);
+
+    // Step 3: Compile files in order
+    let code_buf = mf_mem_read_i64(config, PC_CODE_BUF());
+    let total_code_size = 0;
+
+    let i = 0;
+    while i < sorted_count {
+        let file_index = mf_mem_read_i64(sorted_indices, i * 8);
+        let file_path = mf_mem_read_i64(file_list, file_index * FILE_ENTRY_SIZE());
+
+        // Compile this file
+        let compiled = compile_single_file(file_path);
+        if compiled == 0 {
+            return COMPILE_ERR_PARSE();
+        }
+
+        // TODO: Append compiled code to combined buffer
+        // This would involve:
+        // 1. Getting code size from compiled result
+        // 2. Copying code to code_buf at current offset
+        // 3. Updating total_code_size
+        // 4. Handling relocations/symbol resolution
+
+        i = i + 1;
+    }
+
+    mf_mem_write_i64(config, PC_CODE_SIZE(), total_code_size);
+
+    return COMPILE_OK();
+}
+
+// ============================================================================
+// SECTION 9: LINKING
+// ============================================================================
+
+// Link compiled files into a single executable
+// files: array of compiled code buffers
+// count: number of files
+// output: path to output executable
+// Returns: 0 on success, error code on failure
+fn link_compiled_files(files, count, output) {
+    // TODO: Implement linking logic
+    // This should:
+    // 1. Resolve cross-file symbol references
+    // 2. Merge code sections
+    // 3. Build combined symbol table
+    // 4. Write PE executable using write_pe()
+
+    // For now, return success placeholder
+    return COMPILE_OK();
+}
+
+// ============================================================================
+// SECTION 10: UTILITY FUNCTIONS
+// ============================================================================
+
+// Print compilation progress
+fn print_compiling(file_path) {
+    // Print "Compiling: "
+    print_int(67);   // C
+    print_int(111);  // o
+    print_int(109);  // m
+    print_int(112);  // p
+    print_int(105);  // i
+    print_int(108);  // l
+    print_int(105);  // i
+    print_int(110);  // n
+    print_int(103);  // g
+    print_int(58);   // :
+    print_int(32);   // space
+
+    // Print file path
+    let i = 0;
+    let c = peek(file_path, i);
+    while c != 0 {
+        print_int(c);
+        i = i + 1;
+        c = peek(file_path, i);
+    }
+
+    print_int(10);   // newline
+    return 0;
+}
+
+// Print number of files found
+fn print_files_found(count) {
+    // Print "Found "
+    print_int(70);   // F
+    print_int(111);  // o
+    print_int(117);  // u
+    print_int(110);  // n
+    print_int(100);  // d
+    print_int(32);   // space
+
+    // Print count (simple single/double digit)
+    if count >= 100 {
+        print_int(48 + count / 100);
+        count = count - (count / 100) * 100;
+    }
+    if count >= 10 {
+        print_int(48 + count / 10);
+        count = count - (count / 10) * 10;
+    }
+    print_int(48 + count);
+
+    // Print " .xers file(s)"
+    print_int(32);   // space
+    print_int(46);   // .
+    print_int(120);  // x
+    print_int(101);  // e
+    print_int(114);  // r
+    print_int(115);  // s
+    print_int(32);   // space
+    print_int(102);  // f
+    print_int(105);  // i
+    print_int(108);  // l
+    print_int(101);  // e
+    print_int(40);   // (
+    print_int(115);  // s
+    print_int(41);   // )
+    print_int(10);   // newline
+
+    return 0;
+}
+
+// Print compilation error
+fn print_compile_error(error_code, file_path) {
+    // Print "Error "
+    print_int(69);   // E
+    print_int(114);  // r
+    print_int(114);  // r
+    print_int(111);  // o
+    print_int(114);  // r
+    print_int(32);   // space
+
+    // Print error code
+    print_int(48 + error_code);
+
+    // Print ": "
+    print_int(58);   // :
+    print_int(32);   // space
+
+    // Print description based on error code
+    if error_code == COMPILE_ERR_FILE_NOT_FOUND() {
+        // "File not found"
+        print_int(70); print_int(105); print_int(108); print_int(101);
+        print_int(32);
+        print_int(110); print_int(111); print_int(116);
+        print_int(32);
+        print_int(102); print_int(111); print_int(117); print_int(110); print_int(100);
+    }
+    if error_code == COMPILE_ERR_PARSE() {
+        // "Parse error"
+        print_int(80); print_int(97); print_int(114); print_int(115); print_int(101);
+        print_int(32);
+        print_int(101); print_int(114); print_int(114); print_int(111); print_int(114);
+    }
+    if error_code == COMPILE_ERR_TOO_MANY_FILES() {
+        // "Too many files"
+        print_int(84); print_int(111); print_int(111);
+        print_int(32);
+        print_int(109); print_int(97); print_int(110); print_int(121);
+        print_int(32);
+        print_int(102); print_int(105); print_int(108); print_int(101); print_int(115);
+    }
+    if error_code == COMPILE_ERR_CIRCULAR_DEP() {
+        // "Circular dependency"
+        print_int(67); print_int(105); print_int(114); print_int(99); print_int(117);
+        print_int(108); print_int(97); print_int(114);
+        print_int(32);
+        print_int(100); print_int(101); print_int(112);
+    }
+
+    print_int(10);   // newline
+
+    // Print file path if provided
+    if file_path != 0 {
+        print_int(32);   // space
+        print_int(32);   // space
+        print_int(97);   // a
+        print_int(116);  // t
+        print_int(32);   // space
+
+        let i = 0;
+        let c = peek(file_path, i);
+        while c != 0 {
+            print_int(c);
+            i = i + 1;
+            c = peek(file_path, i);
+        }
+        print_int(10);   // newline
+    }
+
+    return 0;
+}
+
+// ============================================================================
+// SECTION 11: HIGH-LEVEL API
+// ============================================================================
+
+// Main entry point for compiling a project directory
+// src_dir: source directory containing .xers files
+// out_file: output executable path
+// Returns: 0 on success, error code on failure
+fn compile_directory(src_dir, out_file) {
+    // Allocate and initialize config
+    let config = alloc(PC_SIZE());
+    init_project_config(config, src_dir, out_file);
+
+    // Compile project
+    let result = compile_project(config);
+
+    if result == COMPILE_OK() {
+        // Link and write output
+        let file_list = mf_mem_read_i64(config, PC_FILE_LIST());
+        let file_count = mf_mem_read_i64(config, PC_FILE_COUNT());
+        let count = mf_mem_read_i64(file_count, 0);
+
+        // Get compiled code pointers (placeholder - would be actual compiled buffers)
+        let code_buf = mf_mem_read_i64(config, PC_CODE_BUF());
+
+        result = link_compiled_files(code_buf, count, out_file);
+    }
+
+    return result;
+}
+
+// List all .xers files in a directory (for debugging/inspection)
+// src_dir: source directory to scan
+// Returns: number of files found
+fn list_project_files(src_dir) {
+    let file_list = alloc(MAX_SOURCE_FILES() * FILE_ENTRY_SIZE());
+    let file_count = alloc(8);
+    mf_mem_write_i64(file_count, 0, 0);
+
+    let result = scan_source_files(src_dir, file_list, file_count);
+    if result != 0 {
+        print_compile_error(result, src_dir);
+        return 0;
+    }
+
+    let count = mf_mem_read_i64(file_count, 0);
+    print_files_found(count);
+
+    // Print each file
+    let i = 0;
+    while i < count {
+        let path = mf_mem_read_i64(file_list, i * FILE_ENTRY_SIZE());
+        print_int(32);   // space
+        print_int(32);   // space
+        print_int(45);   // -
+        print_int(32);   // space
+
+        let j = 0;
+        let c = peek(path, j);
+        while c != 0 {
+            print_int(c);
+            j = j + 1;
+            c = peek(path, j);
+        }
+        print_int(10);   // newline
+
+        i = i + 1;
+    }
+
+    return count;
+}

@@ -1,0 +1,21 @@
+# XersLang Project Configuration File
+# This file is parsed by the TOML parser in std/toml.xers
+
+[package]
+name = "xerslang-compiler"
+version = "0.1.0"
+authors = ["XersLang Team"]
+description = "Self-hosted compiler for XersLang"
+
+[build]
+output = "build/xersc.exe"
+target = "x64-windows"
+optimization = "release"
+
+[dependencies]
+# No external dependencies - self-contained
+
+[features]
+modules = true
+type-inference = true
+pe-generation = true
