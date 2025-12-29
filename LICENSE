@@ -1,6 +1,13 @@
+XersLang is distributed under the terms of both the MIT license and the
+Apache License (Version 2.0), at your option.
+
+See LICENSE-APACHE and LICENSE-MIT for details.
+
+================================================================================
+
 MIT License
 
-Copyright (c) 2024 XerLang Contributors
+Copyright (c) 2024-2025 XersLang Contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -20,19 +27,28 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
----
+================================================================================
 
-ADDITIONAL DISCLAIMER FOR HARDWARE ANALYSIS TOOLS:
+Apache License, Version 2.0
 
-The reverse engineering tools included in this software are provided strictly
-for educational and research purposes. Users are solely responsible for
-ensuring their use complies with all applicable laws, regulations, and
-licensing agreements.
+Copyright (c) 2024-2025 XersLang Contributors
 
-The authors and contributors make no warranties regarding the legality of
-using these tools in any specific jurisdiction or context. Hardware analysis
-activities may be subject to restrictions under computer fraud laws, DMCA,
-trade secret laws, or other regulations.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-USE AT YOUR OWN RISK. The authors disclaim all liability for any damages,
-legal consequences, or hardware damage resulting from the use of this software.
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+================================================================================
+
+CONTRIBUTION
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this project by you, as defined in the Apache-2.0 license,
+shall be dual licensed as above, without any additional terms or conditions.

@@ -1,145 +1,103 @@
-# XersLang - Self-Hosted Systems Programming Language
+# XersLang
 
-XersLang is a minimal, self-hosted systems programming language that compiles directly to x64 Windows PE executables. The compiler is written entirely in XersLang itself, demonstrating true self-hosting capability.
+A minimal, self-hosted systems programming language that compiles directly to x64 Windows PE executables.
 
-## Features
+## Overview
 
-- **Self-hosted compiler** - xersc.xers compiles itself
-- **Direct x64 machine code generation** - No LLVM, no external dependencies
-- **Windows PE executable generation** - Produces standalone .exe files
-- **Minimal runtime** - Core builtins for memory, strings, and file I/O
-- **Zero external dependencies** - Completely self-contained
+XersLang is a self-hosted compiler written in ~3,150 lines of its own language. It generates native Windows executables without external dependencies - no LLVM, no linker, no runtime.
 
-## Project Structure
+## Quick Start
 
-```
-XersLang/
-├── xerslang-compiler/
-│   ├── xersc.xers          # Self-hosted compiler source (3000+ lines)
-│   ├── std/                # Standard library
-│   │   ├── fs.xers         # File system operations
-│   │   ├── io.xers         # Input/Output
-│   │   ├── mem.xers        # Memory management
-│   │   └── string.xers     # String utilities
-│   ├── build/              # Build artifacts (.obj files)
-│   ├── Makefile            # Build configuration
-│   └── *.bat               # Build scripts
-├── LICENSE
-└── README.md
+```bash
+# Compile a program
+xslc.exe hello.xers
+
+# Run it
+hello.exe
 ```
 
-## Building
-
-### Prerequisites
-
-- Microsoft Macro Assembler (ML64.exe)
-- Microsoft Linker (LINK.exe)
-- Windows SDK
-
-### Build the Compiler
-
-```batch
-cd xerslang-compiler
-build_xersc.bat
-```
-
-This produces `build/xersc.exe`.
-
-### Compile a Program
-
-```batch
-build\xersc.exe myprogram.xers -o myprogram.exe
-```
-
-## Language Syntax
-
-XersLang has a minimal, C-like syntax:
+## Language
 
 ```xers
-fn main() {
-    let x = 42;
-    return x;
+fn main() -> i64 {
+    let msg = "Hello, World!";
+    print_str(msg);
+    return 0;
 }
 
-fn add(a, b) {
-    return a + b;
-}
-
-fn factorial(n) {
-    if n <= 1 {
-        return 1;
-    }
+fn factorial(n: i64) -> i64 {
+    if n <= 1 { return 1; }
     return n * factorial(n - 1);
 }
 ```
 
-### Built-in Functions
+### Types
+
+| Type | Description |
+|------|-------------|
+| `i64` | 64-bit signed integer |
+| `u8` | 8-bit unsigned byte |
+| `ptr` | Raw pointer |
+| `str` | String (pointer to bytes) |
+
+### Builtins
 
 | Function | Description |
 |----------|-------------|
-| `alloc(size)` | Allocate memory, returns pointer |
-| `peek(ptr, offset)` | Read byte from memory |
-| `poke(ptr, offset, value)` | Write byte to memory |
-| `strlen(str)` | Get string length |
-| `streq(s1, s2)` | Compare strings (1 if equal) |
-| `print_int(n)` | Print integer to console |
-| `read_file(path)` | Read file contents, returns pointer |
-| `file_len(path)` | Get file size in bytes |
-| `write_file(path, data, len)` | Write data to file |
+| `alloc(size)` | Allocate heap memory |
+| `peek(ptr, offset)` | Read byte at offset |
+| `poke(ptr, offset, val)` | Write byte at offset |
+| `print_int(n)` | Print integer |
+| `print_str(s)` | Print string |
+| `read_file(path)` | Read file to buffer |
+| `write_file(path, data, len)` | Write buffer to file |
 
-### Control Flow
+## Project Structure
 
-```xers
-fn fibonacci(n) {
-    if n <= 1 {
-        return n;
-    }
-
-    let a = 0;
-    let b = 1;
-    let i = 2;
-
-    while i <= n {
-        let temp = a + b;
-        a = b;
-        b = temp;
-        i = i + 1;
-    }
-
-    return b;
-}
+```
+xerslang-compiler/
+  xersc.xers       # Self-hosted compiler
+  std/
+    fs.xers        # File system
+    io.xers        # Input/output
+    mem.xers       # Memory operations
+    string.xers    # String utilities
 ```
 
 ## Self-Hosting
 
-The compiler can compile itself:
+The compiler compiles itself:
 
-```batch
-:: Stage 0: Use bootstrap compiler
-build\xersc_v0.exe xersc.xers -o build\xersc_v1.exe
+```bash
+# Stage 1: Bootstrap compiles source
+xslc_v0.exe xersc.xers -o xslc_v1.exe
 
-:: Stage 1: Use v1 to compile itself
-build\xersc_v1.exe xersc.xers -o build\xersc_v2.exe
+# Stage 2: v1 compiles source
+xslc_v1.exe xersc.xers -o xslc_v2.exe
 
-:: Verify: v1 and v2 should be identical
-fc /b build\xersc_v1.exe build\xersc_v2.exe
+# Verification: v1 == v2 (fixed point)
+fc /b xslc_v1.exe xslc_v2.exe
 ```
+
+## Tools
+
+| Tool | Description |
+|------|-------------|
+| `xslc` | XersLang Compiler |
+| `xslf` | XersLang Finder (line counter) |
+| `xerslang-vscode-extension` | VSCode syntax highlighting |
 
 ## Architecture
 
-XersLang is designed for:
-
-- **Minimal complexity** - Self-contained in ~3000 lines
-- **Fast compilation** - Direct to machine code
-- **Educational value** - Understand compilation from first principles
-- **Bootstrap verification** - Compiler compiles itself identically
-
-### Compilation Pipeline
-
 ```
-Source (.xers) → Lexer → Parser → Type Check → Codegen → PE Writer → Executable
+Source (.xers) -> Lexer -> Parser -> TypeCheck -> Codegen -> PE Writer -> .exe
 ```
+
+- Direct x64 machine code emission
+- Native Windows PE32+ generation
+- No intermediate representation
+- Single-pass compilation
 
 ## License
 
-MIT License - See LICENSE file for details.
+Licensed under MIT OR Apache-2.0 (your choice). See [LICENSE](LICENSE).
