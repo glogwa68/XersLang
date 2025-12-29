@@ -1,0 +1,3 @@
+# XersLang language detection for GitHub
+*.xers linguist-language=Rust
+*.xers linguist-detectable=true
