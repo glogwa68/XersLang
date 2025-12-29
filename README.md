@@ -29,12 +29,12 @@ hello.exe
 ## New in v0.1.2: Cargo-style CLI
 
 ```bash
-xersc build              # Build project from xers.toml
-xersc build --release    # Optimized build
-xersc new my-project     # Create new project
-xersc new my-lib --lib   # Create library
-xersc run                # Build and execute
-xersc clean              # Clean build directory
+xslc build              # Build project from xers.toml
+xslc build --release    # Optimized build
+xslc new my-project     # Create new project
+xslc new my-lib --lib   # Create library
+xslc run                # Build and execute
+xslc clean              # Clean build directory
 ```
 
 ### Project Structure (xers.toml)
@@ -141,14 +141,12 @@ xerslang-compiler/
 The compiler compiles itself:
 
 ```bash
-# Stage 1: Bootstrap compiles source
-xslc_v0.exe xersc.xers -o xslc_v1.exe
+# Compile the compiler source with itself
+xslc.exe xersc.xers -o xslc_new.exe
 
-# Stage 2: v1 compiles source
-xslc_v1.exe xersc.xers -o xslc_v2.exe
-
-# Verification: v1 == v2 (fixed point)
-fc /b xslc_v1.exe xslc_v2.exe
+# Verify: new compiler produces identical output
+xslc_new.exe xersc.xers -o xslc_verify.exe
+fc /b xslc_new.exe xslc_verify.exe
 ```
 
 ## Architecture
